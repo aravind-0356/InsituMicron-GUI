@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# PyInstaller build artifacts
+build/
+dist/
+installer_output/
+*.spec.bak
+
+# Installer output
+*.exe
+*.msi
+
+# IDE / Editor
+.idea/
+.vscode/
+.mypy_cache/
+.pytest_cache/
+*.swp
+*~
+
+# Logs & temp files
+logs/
+*.log
+
+# Large binary / data files
+Data/
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini

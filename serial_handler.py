@@ -1,0 +1,107 @@
+# serial_handler.py
+import serial
+import serial.tools.list_ports
+import threading
+import time
+from PySide6.QtCore import QObject, Signal, Slot
+from logging_config import get_logger
+
+logger = get_logger(__name__)
+
+class SerialHandler(QObject):
+    # Signals to be emitted from this QObject
+    data_received = Signal(str)
+    connection_status_changed = Signal(bool, str)
+
+    def __init__(self):
+        super().__init__()
+        self.ser = None
+        self.read_thread = None
+        self.running = False
+        self._is_connected_status = False
+
+    def is_connected(self):
+        return self._is_connected_status
+
+    def get_ports(self):
+        """Returns a list of available serial port devices."""
+        return [port.device for port in serial.tools.list_ports.comports()]
+
+    def connect(self, port, baudrate=115200):
+        if self.is_connected():
+            logger.info("Already connected, disconnecting first.")
+            self.disconnect()
+            time.sleep(0.05)
+
+        try:
+            self.ser = serial.Serial(port, baudrate, timeout=0.01)
+            self.running = True
+            self.read_thread = threading.Thread(target=self.read_loop, daemon=True)
+            self.read_thread.start()
+            self._is_connected_status = True
+            self.connection_status_changed.emit(True, f"Connected to {port} @ {baudrate}")
+            logger.info("Successfully connected to %s at %d baud.", port, baudrate)
+            return True
+        except Exception as e:
+            self._is_connected_status = False
+            self.connection_status_changed.emit(False, f"Connection Error: {e}")
+            logger.error("Could not connect to %s - %s", port, e)
+            return False
+
+    def disconnect(self):
+        self.running = False
+        if self.read_thread and self.read_thread.is_alive():
+            self.read_thread.join(timeout=0.5)
+            if self.read_thread.is_alive():
+                logger.warning("Read thread did not terminate cleanly.")
+
+        if self.ser and self.ser.is_open:
+            try:
+                self.ser.close()
+                logger.info("Serial port closed.")
+            except Exception as e:
+                logger.error("Error closing serial port: %s", e)
+
+        self._is_connected_status = False
+        self.connection_status_changed.emit(False, "Disconnected")
+        logger.info("Disconnected.")
+
+    def send_cmd(self, cmd):
+        if self.is_connected():
+            try:
+                self.ser.write((cmd + "\n").encode('utf-8'))
+                logger.debug("[TX] %s", cmd)
+            except serial.SerialException as e:
+                logger.error("[Serial TX Error] %s - Disconnecting due to error.", e)
+                self.disconnect()
+            except Exception as e:
+                logger.error("[Serial TX Error] An unexpected error occurred during send: %s", e)
+        else:
+            logger.warning("[TX Failed] Not connected. Command: %s", cmd)
+
+    def read_loop(self):
+        logger.info("read_loop STARTED.")
+        while self.running and self.is_connected():
+            try:
+                # Use readline with the set timeout (0.01s)
+                # This blocks briefly, checking for data
+                raw_line_bytes = self.ser.readline()
+                if raw_line_bytes:
+                    line = raw_line_bytes.decode(errors="ignore").strip()
+                    if line:
+                        self.data_received.emit(line)
+                else:
+                    # Optional: sleep slightly if usage is high, but readline timeout handles pacing
+                    pass
+
+            except serial.SerialException as e:
+                logger.error("Serial port error: %s. Stopping read loop.", e)
+                self.running = False
+                self._is_connected_status = False
+                self.connection_status_changed.emit(False, f"Serial Error: {e}")
+            except Exception as e:
+                logger.error("An unexpected error occurred: %s. Stopping read loop.", e)
+                self.running = False
+                self._is_connected_status = False
+                self.connection_status_changed.emit(False, f"Read Loop Error: {e}")
+        logger.info("read_loop STOPPED.")
