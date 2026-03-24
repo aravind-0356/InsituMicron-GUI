@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+*.so
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# PyInstaller build artifacts
+build/
+dist/
+Output/
+*.spec.bak
+
+# Installer output
+*.exe
+*.msi
+*.Setup.exe
+
+# IDE / Editor
+.idea/
+.vscode/
+.mypy_cache/
+.pytest_cache/
+*.swp
+*.swo
+*~
+
+# Logs & temp files
+logs/
+*.log
+build_log.txt
+pip_list*.txt
+extracted_manual.txt
+audit_report.md
+pip_list.txt
+pip_list_audit.txt
+pip_list_utf8.txt
+
+# Local config (contains user-specific paths)
+home_config.json
+
+# Large binary / data files (not suitable for Git)
+Data/
+
+# NI documentation PDFs (link externally)
+NI_DAQ_USB_6001.pdf
+NI_daq_user_guide.pdf
+
+# OS files
+Thumbs.db
+.DS_Store
+desktop.ini

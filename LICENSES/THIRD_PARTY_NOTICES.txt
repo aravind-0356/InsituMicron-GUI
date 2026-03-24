@@ -1,0 +1,148 @@
+# Third-Party Software Notices and Information
+
+This file contains licensing information relating to third-party software included with or used by the InsituMicron GUI.
+
+---
+
+## 1. PySide6 (Qt for Python)
+
+**License**: GNU Lesser General Public License v3.0 (LGPL-3.0)  
+**Copyright**: Copyright (C) 2015-2024 The Qt Company Ltd.  
+**Website**: https://www.qt.io/qt-for-python
+
+### LGPL Notice for PySide6
+
+This application uses PySide6, which is licensed under LGPL-3.0. The complete license text is available at: https://www.gnu.org/licenses/lgpl-3.0.txt
+
+**Important**: Users have the right to:
+- Use this software with the provided version of PySide6
+- Replace PySide6 with a different version (subject to API compatibility)
+- Request the source code of this application
+
+This application does NOT modify PySide6 source code and uses it solely through its public API via dynamic linking (Python imports).
+
+---
+
+## 2. pyqtgraph
+
+**License**: MIT License  
+**Copyright**: Copyright (c) 2012-2024 Luke Campagnola and contributors
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+---
+
+## 3. pyserial
+
+**License**: BSD 3-Clause License  
+**Copyright**: Copyright (c) 2001-2024 Chris Liechti
+
+Redistribution and use in source and binary forms, with or without modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice, this list of conditions and the following disclaimer in the documentation and/or other materials provided with the distribution.
+
+3. Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this software without specific prior written permission.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED.
+
+---
+
+## 4. OpenCV (opencv-python)
+
+**License**: Apache License 2.0  
+**Copyright**: Copyright (C) 2000-2024, Intel Corporation, all rights reserved.  
+Copyright (C) 2009-2024, Willow Garage Inc., all rights reserved.  
+Copyright (C) 2009-2024, NVIDIA Corporation, all rights reserved.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at:
+http://www.apache.org/licenses/LICENSE-2.0
+
+---
+
+## 5. openpyxl
+
+**License**: MIT License  
+**Copyright**: Copyright (c) 2010-2024 openpyxl
+
+See MIT License text in Section 2 (pyqtgraph) - same terms apply.
+
+---
+
+## 6. pandas
+
+**License**: BSD 3-Clause License  
+**Copyright**: Copyright (c) 2008-2024, AQR Capital Management, LLC, Lambda Foundry, Inc. and PyData Development Team
+
+See BSD License text in Section 3 (pyserial) - same terms apply.
+
+---
+
+## 7. PyYAML
+
+**License**: MIT License  
+**Copyright**: Copyright (c) 2017-2024 Ingy döt Net  
+Copyright (c) 2006-2016 Kirill Simonov
+
+See MIT License text in Section 2 (pyqtgraph) - same terms apply.
+
+---
+
+## 8. python-dateutil
+
+**License**: Apache License 2.0 / BSD 3-Clause (dual licensed)  
+**Copyright**: Copyright (c) 2003-2024 Gustavo Niemeyer
+
+Licensed under the Apache License 2.0 or BSD 3-Clause at the user's option.
+
+---
+
+## 9. pytz
+
+**License**: MIT License  
+**Copyright**: Copyright (c) 2003-2024 Stuart Bishop
+
+See MIT License text in Section 2 (pyqtgraph) - same terms apply.
+
+---
+
+## 10. six
+
+**License**: MIT License  
+**Copyright**: Copyright (c) 2010-2024 Benjamin Peterson
+
+See MIT License text in Section 2 (pyqtgraph) - same terms apply.
+
+---
+
+## Optional Dependencies
+
+### FLIR Spinnaker SDK (PySpin)
+
+**License**: Proprietary  
+**Copyright**: Copyright (C) 2024 FLIR Systems, Inc. All rights reserved.
+
+**NOT INCLUDED**: This software is an optional runtime dependency that users must install separately. It is NOT distributed with this application. Users must accept FLIR's license agreement independently when installing the Spinnaker SDK.
+
+---
+
+## Full License Texts
+
+Complete license texts for LGPL-3.0, Apache 2.0, BSD, and MIT licenses can be found at:
+
+- LGPL-3.0: https://www.gnu.org/licenses/lgpl-3.0.txt
+- Apache 2.0: https://www.apache.org/licenses/LICENSE-2.0.txt
+- BSD 3-Clause: https://opensource.org/licenses/BSD-3-Clause
+- MIT: https://opensource.org/licenses/MIT
+
+---
+
+**Generated**: January 2026  
+**For**: InsituMicron GUI v2.1.1

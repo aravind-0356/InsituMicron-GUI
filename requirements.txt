@@ -1,0 +1,20 @@
+# Core GUI Framework
+PySide6>=6.9.0
+
+# Graphing
+pyqtgraph>=0.13.0
+
+# Serial Communication
+pyserial>=3.5
+
+# Excel Export
+openpyxl>=3.1.0
+
+# Camera (OpenCV) - for image saving
+opencv-python>=4.8.0
+
+# PySpin is NOT included here - requires FLIR Spinnaker SDK installed separately.
+# nidaqmx requires the NI-DAQmx driver to be installed separately from ni.com.
+
+nidaqmx>=1.0.0
+numpy>=1.24.0

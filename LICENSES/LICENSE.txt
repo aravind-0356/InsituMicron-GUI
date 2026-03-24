@@ -1,0 +1,118 @@
+InsituMicron GUI - Software License
+Copyright (C) 2026 InsituMicron. All rights reserved.
+
+PROPRIETARY SOFTWARE NOTICE
+This software is proprietary and confidential.
+The InsituMicron GUI application ("the Software") is the exclusive property of InsituMicron. The Software is protected by copyright laws and international treaty provisions.
+Grant of License
+Subject to the terms below, InsituMicron grants you a non-exclusive, non-transferable license to:
+
+Install and use the Software on authorized computer systems
+Use the Software for its intended purpose of controlling Insitu test equipment
+
+Restrictions
+You may NOT:
+
+Reverse engineer, decompile, or disassemble the Software
+Modify, adapt, translate, or create derivative works of the Software
+Redistribute, sublicense, rent, lease, or lend the Software
+Remove or alter any copyright, trademark, or proprietary notices
+Use the Software for any purpose other than its intended use
+
+Warranty Disclaimer
+THE SOFTWARE IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, AND NONINFRINGEMENT. IN NO EVENT SHALL INSITUMICRON BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER LIABILITY ARISING FROM THE USE OF THE SOFTWARE.
+
+THIRD-PARTY OPEN-SOURCE COMPONENTS
+This Software incorporates the following open-source components, which are subject to their respective licenses:
+1. PySide6 (Qt for Python) - LGPL v3.0
+License: GNU Lesser General Public License v3.0 (LGPL-3.0)
+Copyright: The Qt Company Ltd.
+Website: https://www.qt.io/qt-for-python
+IMPORTANT LGPL NOTICE:
+This Software uses PySide6, which is licensed under LGPL-3.0. Under the LGPL:
+
+PySide6 Source Code: The complete source code for PySide6 is available at:
+
+https://code.qt.io/cgit/pyside/pyside-setup.git
+https://download.qt.io/official_releases/QtForPython/
+
+
+Your Rights Regarding PySide6:
+
+You may obtain the PySide6 source code from the links above
+You may modify PySide6 and use modified versions
+You may replace the PySide6 library with compatible versions
+
+
+Dynamic Linking:
+
+This Software uses PySide6 via dynamic linking (Python imports)
+No modifications have been made to PySide6 source code
+The proprietary portions of this Software remain separate from PySide6
+
+
+LGPL Compliance:
+
+The full LGPL-3.0 license text: https://www.gnu.org/licenses/lgpl-3.0.txt
+PySide6 is distributed "AS IS" without warranty
+For PySide6 support, contact The Qt Company
+
+
+
+Note: The LGPL license applies ONLY to PySide6 itself, not to the proprietary InsituMicron GUI application code.
+2. Other Open-Source Components
+The following components are used under permissive licenses (MIT, BSD, Apache 2.0):
+
+pyqtgraph - MIT License
+pyserial - BSD License
+OpenCV (opencv-python) - Apache License 2.0
+openpyxl - MIT License
+pandas - BSD License
+PyYAML - MIT License
+python-dateutil - Apache/BSD License
+pytz - MIT License
+six - MIT License
+
+Full license texts and attributions are available in THIRD_PARTY_NOTICES.txt.
+
+OPTIONAL RUNTIME DEPENDENCY
+FLIR Spinnaker SDK 
+License: Proprietary (FLIR Systems, Inc.)
+Status: Optional runtime dependency for camera functionality
+NOT INCLUDED: The FLIR Spinnaker SDK module are NOT distributed with this Software. If you require camera functionality, you must:
+
+Download the FLIR Spinnaker SDK separately from:
+https://www.flir.com/products/spinnaker-sdk/
+Accept FLIR's license agreement independently
+Install the Spinnaker SDK per FLIR's instructions
+
+The InsituMicron GUI will function in data-only mode if Spinnaker SDK is not installed.
+
+TERMS AND CONDITIONS
+1. Ownership
+All rights, title, and interest in the proprietary portions of the Software (excluding third-party open-source components) remain with InsituMicron.
+2. Support and Updates
+Software support and updates are provided at the discretion of InsituMicron. There is no obligation to provide updates, bug fixes, or technical support.
+3. Termination
+This license is effective until terminated. Your rights will terminate automatically if you fail to comply with any term of this license.
+4. Governing Law
+This license shall be governed by the laws of India, without regard to conflict of law provisions.
+5. Entire Agreement
+This license constitutes the entire agreement between you and InsituMicron concerning the Software.
+
+CONTACT INFORMATION
+For Commercial Licensing Inquiries:
+
+Email: info@insitumicron.com
+Website: https://insitumicron.com/
+
+
+
+ACKNOWLEDGMENTS
+This Software is built using PySide6 (Qt for Python) and other open-source libraries. We thank the open-source community for their contributions.
+For detailed attributions, see THIRD_PARTY_NOTICES.txt.
+
+Software Version: 2.1.1
+License Version: 1.0
+Last Updated: January 2026
+© 2026 InsituMicron. All rights reserved.
