@@ -162,5 +162,5 @@ pyinstaller build.spec
 
 ## License
 
-Proprietary — Insitu Instruments Pvt. Ltd. All rights reserved.  
-Copyright © 2025 Insitu Instruments.
+Proprietary — InsituMicron Pvt. Ltd. All rights reserved.  
+Copyright © 2025 InsituMicron.
