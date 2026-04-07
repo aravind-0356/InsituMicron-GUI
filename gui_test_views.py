@@ -1154,6 +1154,7 @@ class SensorDisplayPanel(QWidget):
 # =========================================================
 class SampleInspectionPanel(QWidget):
     camera_error = Signal(str)  # Emitted on camera disconnect/error
+    light_intensity_changed = Signal(float)  # Emitted with voltage (0.0-10.0)
     def __init__(self):
         super().__init__()
         from gui import CameraWorker
@@ -1281,6 +1282,34 @@ class SampleInspectionPanel(QWidget):
 
         controls_layout.addWidget(self.controls_group)
 
+        # --- Light Intensity Control (always enabled, independent of camera) ---
+        light_group = QGroupBox("Light Intensity Control")
+        light_layout = QVBoxLayout(light_group)
+        light_layout.setSpacing(6)
+        light_layout.setContentsMargins(12, 22, 12, 12)
+
+        light_header = QHBoxLayout()
+        lbl_light_name = QLabel("Intensity")
+        lbl_light_name.setStyleSheet("font-weight: bold;")
+        self.lbl_light_pct = QLabel("0%")
+        self.lbl_light_pct.setStyleSheet(
+            "font-weight: bold; color: #2c2f33; background-color: #f7f7f7; border: 1px solid #bdc3c7; border-radius: 4px; padding: 6px; min-width: 70px;")
+        self.lbl_light_pct.setAlignment(Qt.AlignCenter)
+
+        light_header.addWidget(lbl_light_name)
+        light_header.addStretch()
+        light_header.addWidget(self.lbl_light_pct)
+
+        self.light_slider = QSlider(Qt.Horizontal)
+        self.light_slider.setRange(0, 1000)
+        self.light_slider.setValue(0)
+        self.light_slider.setCursor(Qt.PointingHandCursor)
+        self.light_slider.valueChanged.connect(self._on_light_slider_changed)
+
+        light_layout.addLayout(light_header)
+        light_layout.addWidget(self.light_slider)
+        controls_layout.addWidget(light_group)
+
         controls_layout.addStretch()
 
         self.status_lbl = QLabel("Ready")
@@ -1397,6 +1426,13 @@ class SampleInspectionPanel(QWidget):
     def on_auto_changed(self, name, is_checked):
         self.sliders[name].setEnabled(not is_checked)
         self.on_slider_changed(name, self.sliders[name].value())
+
+    def _on_light_slider_changed(self, val):
+        """Map slider (0-1000) → voltage (0.0-10.0V) and update label."""
+        voltage = val / 100.0  # 0-1000 → 0.0-10.0V
+        pct = val / 10.0       # 0-1000 → 0.0-100.0%
+        self.lbl_light_pct.setText(f"{pct:.1f}%")
+        self.light_intensity_changed.emit(voltage)
 
     @Slot(QImage)
     def update_image(self, q_img):

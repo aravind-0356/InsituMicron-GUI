@@ -192,6 +192,7 @@ class ConnectionPanel(QWidget):
         """)
         daq_layout.addWidget(self.daq_console)
         
+        daq_group.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         layout.addWidget(daq_group)
         layout.addStretch()
 

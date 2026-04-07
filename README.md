@@ -1,105 +1,208 @@
 # InsituMicron GUI — v3.1.2
 
 > Desktop control & data acquisition GUI for the **InsituMicron in-situ mechanical testing system**.  
-> Supports **Uniaxial** and **Biaxial** test modes with real-time DAQ, FLIR camera control, and serial firmware communication.
+> Deployed at **IIT Patna** for the Uniaxial mechanical test rig.
 
 ---
 
-## Features
+## Deployment Site
 
-- **Uniaxial Test Dashboard** — Load vs. Displacement and Stress vs. Strain graphs
-- **NI-DAQ Integration** — USB-6001 for load cell and displacement sensor acquisition
-- **FLIR Spinnaker Camera** — Live feed and image capture during tests
-- **Serial Firmware Control** — Real-time feedback from Uniaxial/Biaxial firmware over COM port
-- **Excel Data Export** — Auto-generates Sensor Data and Sample Parameters sheets
-- **DPI-Aware UI** — PySide6 interface with dynamic scaling and custom theming
+| Field | Details |
+|-------|---------|
+| **Institution** | IIT Patna |
+| **Rig Type** | Uniaxial (primary), Biaxial (legacy UI retained) |
+| **Hardware** | NI-DAQ USB-6001 (sensors) + STM32 over USB-Serial (motor control) |
+| **Sensor Interface** | NI-DAQmx hardware-timed analog acquisition (AI0: Load, AI1: LVDT Displacement) |
 
 ---
 
-## Version History
+## Key Changes from V2.1.1
 
-| Version | Branch  | Notes |
-|---------|---------|-------|
-| **v3.1.2** | `main` | Current — Uniaxial mode, stress-strain graphs, refactored controllers |
-| v2.1.1  | `v2.1.1` | Legacy — Biaxial/Uniaxial stable release |
+| Area | V2.1.1 (IIT Jammu) | V3.1.2 (IIT Patna) |
+|------|-------------------|-------------------|
+| **Primary sensor interface** | STM32 + ADS1115 (I2C ADC), streamed over serial | NI-DAQ USB-6001 hardware-timed acquisition via `nidaqmx` |
+| **Load channel** | ADS1115 on STM32, serial packet | NI-DAQ AI0 (differential), ±5V, calibrated via linear interpolation |
+| **Displacement channel** | ADS1115 on STM32, serial packet | NI-DAQ AI1 (differential), LVDT ±5V, calibrated via linear interpolation |
+| **Acquisition rate** | Serial poll rate (firmware-dependent) | Hardware-timed 1000 Hz continuous, with 50-sample moving average + median-3 filter |
+| **Stress-Strain graph** | Not present | Added: dropdown to switch between **Load vs. Displacement** and **Stress vs. Strain** |
+| **Graph in dashboard** | Not present | `pyqtgraph` live plot embedded in uniaxial test view |
+| **Architecture** | Monolithic (`gui.py` owns all logic) | Refactored: `controllers.py` (business logic), `daq_handler.py` (DAQ worker), `interfaces.py` (shared protocol) |
+| **Theme** | Global stylesheet inlined in `main.py` | Extracted to `theme.py` module |
+| **App icon** | Not set at runtime | Loaded at startup via `resource_path()` for packaged exe compatibility |
+| **Safety limit** | None | 5000 N hard safety limit — auto-stops motor at overload (compression or tension) via DAQ real-time read |
+| **Preload logic** | Serial-only (firmware handles it) | DAQ-driven: load cell read by `DAQWorker` in real time, motor stopped via serial on target reached |
+
+---
+
+## Hardware Architecture
+
+### Uniaxial Mode (Primary)
+
+```
+NI-DAQ USB-6001
+  ├── AI0 (Differential): Load Cell Amplifier output → Load (N)
+  │     Calibration: -10V → -9810N,  +10V → +9810N  (configurable in Settings)
+  └── AI1 (Differential): LVDT Conditioner output → Displacement (mm)
+        Calibration: 2V → 0mm, 10V → 10mm  (configurable in Settings)
+
+STM32 (USB-Serial)
+  └── Motor controller: VEL/START/STOP commands for single-axis servo
+```
+
+#### DAQ Signal Chain (per sample, 1000 Hz)
+```
+Raw voltage (AI0/AI1)
+  → Linear interpolation (voltage → N or mm)
+  → Median filter (window-3, per channel)
+  → Moving average (window-50, per channel)
+  → Tare offset subtracted
+  → Rate-limited emission: UI @ 30 Hz, Plot @ 10 Hz
+```
+
+### Biaxial Mode (Legacy UI Retained)
+- Same 4-motor + axial panel as V2.1.1 retained in UI (not the primary deployment target at IIT Patna)
+- Biaxial sensor data still sourced from STM32 serial stream (unchanged from V2.1.1)
+
+---
+
+## New: Stress vs. Strain Graph
+
+The uniaxial test dashboard now includes a **graph type selector**:
+
+| Graph Type | X-Axis | Y-Axis |
+|------------|--------|--------|
+| Load vs. Displacement | Displacement (mm) | Load (N) |
+| Stress vs. Strain | Strain (mm/mm or %) | Stress (MPa) |
+
+**Stress and Strain calculations** are based on user-entered sample dimensions (cross-sectional area, gauge length). Sample types supported: Rectangular and Cylindrical.
+
+> **Note**: Graph type is locked once recording begins to prevent mid-test data inconsistency.
+
+---
+
+## DAQ Configuration (Settings Tab)
+
+All DAQ parameters are user-configurable via the Settings tab and persisted in `config/`:
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `daq_device_name` | `Dev1` | NI-DAQ device name (auto-detected at startup) |
+| `daq_load_channel` | `ai0` | Analog input channel for load cell |
+| `daq_disp_channel` | `ai1` | Analog input channel for LVDT |
+| `daq_sample_rate` | `1000` | Hardware acquisition rate (Hz) |
+| `daq_terminal_config` | `DIFF` | Terminal config: `DIFF` (differential) or `RSE` |
+| `daq_load_v_min/max` | `-10 / +10 V` | Voltage range for load calibration |
+| `daq_load_n_min/max` | `-9810 / +9810 N` | Force range for load calibration |
+| `daq_disp_v_min/max` | `2 / 10 V` | Voltage range for LVDT calibration |
+| `daq_disp_mm_min/max` | `0 / 10 mm` | Displacement range for LVDT calibration |
+
+---
+
+## Safety Features (New in V3.1.2)
+
+| Feature | Mechanism |
+|---------|-----------|
+| **5000 N Hard Safety Limit** | `DAQWorker` checks every sample. If load ≥ 5000 N (compression) or ≤ -5000 N (tension) AND motor is driving toward overload, serial `STOP` is sent immediately |
+| **Break Detection** | Configurable load-drop threshold (N). Once peak load drops by ≥ threshold for 10 consecutive samples, motor is stopped and recording flagged |
+| **Preload Auto-Stop** | `DAQWorker` monitors real-time load; stops motor via serial once load reaches target — independent of firmware |
+
+---
+
+## Software Architecture (Refactored)
+
+| File | Role |
+|------|------|
+| `main.py` | Entry point, app icon loading, DPI scaling |
+| `theme.py` | **[NEW]** Centralized global stylesheet (extracted from main.py) |
+| `gui.py` | `MainWindow`: Tab layout, signal routing between controllers and views |
+| `gui_test_views.py` | All test view widgets (motor panels, sensor display, graph with type selector) |
+| `gui_panels.py` | Reusable panel components |
+| `controllers.py` | **[NEW]** Business logic: `TestController`, `RecordingController` — decoupled from UI |
+| `daq_handler.py` | **[NEW]** `DAQWorker` (QThread): NI-DAQmx continuous acquisition, filtering, calibration, CSV streaming |
+| `interfaces.py` | **[NEW]** `SensorWorkerProtocol` TypedDict — shared interface contract between `DAQWorker` and `DataWorker` |
+| `serial_handler.py` | Serial port open/close, send_cmd, incoming data parsing (motor only in Uniaxial) |
+| `settings.py` | JSON settings with DAQ parameters (extended from V2.1.1) |
+| `constants.py` | Brand colors |
+| `logging_config.py` | Rotating file logger + `resource_path()` helper for bundled exe |
+| `dpi_scaling.py` | DPI-aware scaling |
+| `Biaxial_firmware.c` | STM32 biaxial firmware (reference) |
+| `Uniaxial_firmware.c` | STM32 uniaxial firmware (reference) |
+
+---
+
+## Data Acquisition Pipeline
+
+```
+NI-DAQ USB-6001 (1000 Hz hardware-timed)
+  └── AI0: Load Cell Amplifier
+  └── AI1: LVDT Displacement Conditioner
+       │  nidaqmx AnalogMultiChannelReader (batch reads, 100 samples/cycle)
+       ▼
+  DAQWorker (QThread)
+       │  Calibrate → Median-3 → Moving Average-50 → Offset subtraction
+       │  PySide6 Signal: ui_update @ 30 Hz, plot_update @ 10 Hz
+       ▼
+  MainWindow (GUI thread)
+       └─ Updates labels, graphs, CSV (streamed, flush per row)
+
+STM32 USB-Serial  →  DataWorker (QThread)  →  Biaxial sensor fallback
+```
 
 ---
 
 ## Requirements
 
 - Python 3.10+
-- See [`requirements.txt`](requirements.txt) for full list
+- NI-DAQmx Runtime or Full Driver ([download from NI](https://www.ni.com/en/support/downloads/drivers/download.ni-daq-mx.html))
+- See [`requirements.txt`](requirements.txt) for full dependency list
 
 Key dependencies:
+
 | Package | Purpose |
 |---------|---------|
 | `PySide6` | GUI framework |
 | `nidaqmx` | NI-DAQ USB-6001 interface |
-| `PySpin` | FLIR Spinnaker camera SDK |
-| `openpyxl` | Excel export |
-| `pyserial` | Serial firmware communication |
+| `numpy` | Pre-allocated DAQ read buffers |
+| `pyserial` | USB-Serial motor control (STM32) |
+| `pyqtgraph` | Real-time Load/Stress-Strain plotting |
+| `openpyxl` | Excel export (Sensor Data + Sample Parameters sheets) |
+| `PySpin` | FLIR Spinnaker camera (optional) |
+
+> `PySpin` requires the [FLIR Spinnaker SDK](https://www.flir.com/products/spinnaker-sdk/) separately.  
+> `nidaqmx` Python package requires the NI-DAQmx C driver (`nicaiu.dll`) to be installed.
 
 ---
 
 ## Setup & Run
 
 ```bash
-# 1. Create virtual environment
 python -m venv .venv
 .venv\Scripts\activate
-
-# 2. Install dependencies
 pip install -r requirements.txt
-
-# 3. Run the application
 python main.py
 ```
-
-> **Note**: `PySpin` (FLIR Spinnaker SDK) must be installed separately from the [FLIR SDK installer](https://www.flir.com/products/spinnaker-sdk/).  
-> **Note**: NI-DAQmx driver must be installed from [NI website](https://www.ni.com/en/support/downloads/drivers/download.ni-daq-mx.html).
 
 ---
 
 ## Build Installer
 
-Uses PyInstaller + Inno Setup:
-
 ```bash
-# Build executable
 pyinstaller build.spec
-
-# Then compile installer.iss with Inno Setup
+# Then compile installer.iss with Inno Setup Compiler
 ```
-
-See [`installer.iss`](installer.iss) for the Inno Setup script.
 
 ---
 
-## Project Structure
+## Version History
 
-```
-InsituMicron-GUI/
-├── main.py               # Entry point
-├── gui.py                # Main window & UI layout
-├── gui_panels.py         # Reusable UI panel components
-├── gui_test_views.py     # Test mode views (Uniaxial/Biaxial dashboards)
-├── controllers.py        # Business logic & state management
-├── daq_handler.py        # NI-DAQ acquisition worker
-├── serial_handler.py     # Serial port communication
-├── interfaces.py         # Shared worker protocol definitions
-├── settings.py           # User settings persistence
-├── constants.py          # App-wide constants
-├── logging_config.py     # Logging setup
-├── dpi_scaling.py        # DPI-aware scaling utilities
-├── theme.py              # UI theme & styling
-├── config/               # Runtime configuration files
-├── LICENSES/             # Third-party license files
-├── build.spec            # PyInstaller build spec
-└── installer.iss         # Inno Setup installer script
-```
+| Version | Branch | Deployment | Notes |
+|---------|--------|------------|-------|
+| v2.1.1 | `v2.1.1` | IIT Jammu | STM32 serial DAQ (ADS1115), Biaxial + Uniaxial |
+| **v3.1.2** | `v3.1.2` | IIT Patna | NI-DAQ USB-6001, stress-strain graphs, refactored architecture |
 
 ---
 
 ## License
 
-Proprietary — InsituMicron. All rights reserved.
+Proprietary — Insitu Instruments Pvt. Ltd. All rights reserved.  
+Copyright © 2025 Insitu Instruments.

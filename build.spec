@@ -14,16 +14,17 @@ te_datas, te_binaries, te_hiddenimports = collect_all('typing_extensions') # nid
 tz_datas, tz_binaries, tz_hiddenimports = collect_all('tzlocal') # nidaqmx timezone dependency - Verified
 pkg_datas, pkg_binaries, pkg_hiddenimports = collect_all('packaging') # nidaqmx requirement tracking - Verified
 ps_datas, ps_binaries, ps_hiddenimports = collect_all('PySpin') # FLIR camera library - Verified
+cv_datas, cv_binaries, cv_hiddenimports = collect_all('cv2')    # OpenCV image saving - Verified
 
 a = Analysis(
     ['main.py'],
     pathex=[],
-    binaries=ni_binaries + ox_binaries + dep_binaries + pkg_binaries + tz_binaries + nt_binaries + ht_binaries + cl_binaries + te_binaries + ps_binaries,
+    binaries=ni_binaries + ox_binaries + dep_binaries + pkg_binaries + tz_binaries + nt_binaries + ht_binaries + cl_binaries + te_binaries + ps_binaries + cv_binaries,
     datas=[
         ('LICENSES', 'LICENSES'),
         ('app_icon.ico', '.'),
         ('InsituMicronlogo.jpg', '.'),
-    ] + ni_datas + ox_datas + dep_datas + pkg_datas + tz_datas + nt_datas + ht_datas + cl_datas + te_datas + ps_datas + dc_datas + rq_datas + copy_metadata('nidaqmx') + copy_metadata('nitypes') + copy_metadata('python-decouple'),
+    ] + ni_datas + ox_datas + dep_datas + pkg_datas + tz_datas + nt_datas + ht_datas + cl_datas + te_datas + ps_datas + dc_datas + rq_datas + cv_datas + copy_metadata('nidaqmx') + copy_metadata('nitypes') + copy_metadata('python-decouple'),
     hiddenimports=[
         # pyqtgraph
         'pyqtgraph',
@@ -34,7 +35,7 @@ a = Analysis(
         # NumPy internals
         'numpy.core._methods',
         'numpy.lib.format',
-    ] + ni_hiddenimports + ox_hiddenimports + dep_hiddenimports + pkg_hiddenimports + tz_hiddenimports + nt_hiddenimports + ht_hiddenimports + cl_hiddenimports + te_hiddenimports + ps_hiddenimports + dc_hiddenimports + rq_hiddenimports,
+    ] + ni_hiddenimports + ox_hiddenimports + dep_hiddenimports + pkg_hiddenimports + tz_hiddenimports + nt_hiddenimports + ht_hiddenimports + cl_hiddenimports + te_hiddenimports + ps_hiddenimports + dc_hiddenimports + rq_hiddenimports + cv_hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

@@ -34,6 +34,7 @@ from PySide6.QtGui import QImage, QPixmap
 
 from serial_handler import SerialHandler
 from daq_handler import DAQWorker, HAS_NIDAQMX
+from light_controller import LightController
 from gui_panels import ConnectionPanel, SamplePanel, setup_plot_style
 from gui_test_views import (
     UniaxialMotorControlPanel, BiaxialMotorControlPanel, MotorControlPage,
@@ -1155,6 +1156,10 @@ class MainWindow(QMainWindow):
         self.camera_panel.camera_error.connect(
             lambda msg: self.error_mgr.collect("Camera", msg))
 
+        # --- Light Intensity Controller ---
+        self.light_ctrl = LightController(device_name=self.daq_worker._device_name)
+        self.camera_panel.light_intensity_changed.connect(self.light_ctrl.set_voltage)
+
         # Image save triggers — both workers can trigger snapshots
         self.data_worker.request_image_save.connect(self.camera_panel.worker.trigger_save_snapshot)
         self.daq_worker.request_image_save.connect(self.camera_panel.worker.trigger_save_snapshot)
@@ -1553,6 +1558,10 @@ class MainWindow(QMainWindow):
             return
 
         # --- Cleanup: stop all hardware ---
+        # Turn off light first (fast, ~1ms)
+        if hasattr(self, 'light_ctrl'):
+            self.light_ctrl.shutdown()
+
         # Stop recording first — flushes CSV and joins _rec_thread before any thread is killed
         if self.data_worker.is_recording() or self.daq_ctrl.worker.is_recording():
             self.rec_ctrl.stop_record()
