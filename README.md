@@ -13,6 +13,7 @@
 | **Rig Type** | Uniaxial (primary), Biaxial (legacy UI retained) |
 | **Hardware** | NI-DAQ USB-6001 (sensors) + STM32 over USB-Serial (motor control) |
 | **Sensor Interface** | NI-DAQmx hardware-timed analog acquisition (AI0: Load, AI1: LVDT Displacement) |
+| **Illumination** | Edmund Optics SL162-WHIIC Coaxial Spot Light, controlled via NI-DAQ AO0 (0–10 V DC) |
 
 ---
 
@@ -42,8 +43,9 @@
 NI-DAQ USB-6001
   ├── AI0 (Differential): Load Cell Amplifier output → Load (N)
   │     Calibration: -10V → -9810N,  +10V → +9810N  (configurable in Settings)
-  └── AI1 (Differential): LVDT Conditioner output → Displacement (mm)
-        Calibration: 2V → 0mm, 10V → 10mm  (configurable in Settings)
+  ├── AI1 (Differential): LVDT Conditioner output → Displacement (mm)
+  │     Calibration: 2V → 0mm, 10V → 10mm  (configurable in Settings)
+  └── AO0: Edmund Optics SL162-WHIIC Coaxial Spot Light intensity (0–10V DC)
 
 STM32 (USB-Serial)
   └── Motor controller: VEL/START/STOP commands for single-axis servo
@@ -77,6 +79,25 @@ The uniaxial test dashboard now includes a **graph type selector**:
 **Stress and Strain calculations** are based on user-entered sample dimensions (cross-sectional area, gauge length). Sample types supported: Rectangular and Cylindrical.
 
 > **Note**: Graph type is locked once recording begins to prevent mid-test data inconsistency.
+
+---
+
+## New: Light Intensity Control
+
+A dedicated **Light Intensity Controller** module (`light_controller.py`) drives the **Edmund Optics SL162-WHIIC Coaxial Spot Light** via the NI-DAQ USB-6001 analog output.
+
+| Parameter | Value |
+|-----------|-------|
+| **DAQ Channel** | AO0 (analog output) |
+| **Voltage Range** | 0 V (off) – 10 V (max brightness) |
+| **Control** | UI slider in the Image Setup tab |
+| **Default** | 0 V (light off at startup) |
+| **Shutdown** | Automatically resets to 0 V when the application closes |
+
+**Design highlights**:
+- Runs on the main thread — analog output writes are near-instantaneous (~1 ms), so no dedicated worker thread is needed.
+- Completely independent of the DAQ acquisition task in `daq_handler.py`.
+- Gracefully degrades if the NI-DAQmx driver or device is unavailable.
 
 ---
 
@@ -119,12 +140,12 @@ All DAQ parameters are user-configurable via the Settings tab and persisted in `
 | `gui_panels.py` | Reusable panel components |
 | `controllers.py` | **[NEW]** Business logic: `TestController`, `RecordingController` — decoupled from UI |
 | `daq_handler.py` | **[NEW]** `DAQWorker` (QThread): NI-DAQmx continuous acquisition, filtering, calibration, CSV streaming |
+| `light_controller.py` | **[NEW]** Edmund Optics spot light intensity control via NI-DAQ AO0 (0–10 V) |
 | `interfaces.py` | **[NEW]** `SensorWorkerProtocol` TypedDict — shared interface contract between `DAQWorker` and `DataWorker` |
 | `serial_handler.py` | Serial port open/close, send_cmd, incoming data parsing (motor only in Uniaxial) |
 | `settings.py` | JSON settings with DAQ parameters (extended from V2.1.1) |
 | `constants.py` | Brand colors |
 | `logging_config.py` | Rotating file logger + `resource_path()` helper for bundled exe |
-| `dpi_scaling.py` | DPI-aware scaling |
 | `Biaxial_firmware.c` | STM32 biaxial firmware (reference) |
 | `Uniaxial_firmware.c` | STM32 uniaxial firmware (reference) |
 
@@ -198,11 +219,11 @@ pyinstaller build.spec
 | Version | Branch | Deployment | Notes |
 |---------|--------|------------|-------|
 | v2.1.1 | `v2.1.1` | IIT Jammu | STM32 serial DAQ (ADS1115), Biaxial + Uniaxial |
-| **v3.1.2** | `v3.1.2` | IIT Patna | NI-DAQ USB-6001, stress-strain graphs, refactored architecture |
+| **v3.1.2** | `v3.1.2` | IIT Patna | NI-DAQ USB-6001, stress-strain graphs, light intensity control, refactored architecture |
 
 ---
 
 ## License
 
-Proprietary — Insitu Instruments Pvt. Ltd. All rights reserved.  
-Copyright © 2025 Insitu Instruments.
+Proprietary — InsituMicron Pvt. Ltd. All rights reserved.  
+Copyright © 2025 InsituMicron
