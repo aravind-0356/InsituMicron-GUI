@@ -250,6 +250,7 @@ class HomingController(QObject):
     """Manages encoder-based homing logic and config persistence."""
 
     home_position_changed = Signal(object)  # Emits new home pos (int or None)
+    motor_direction_request = Signal(int)    # Request motor direction change (1, -1, 0)
 
     HOME_CONFIG_FILE = os.path.join(get_user_config_dir(), "home_config.json")
 
@@ -266,7 +267,7 @@ class HomingController(QObject):
         self._current_raw_disp = 0.0
 
         self._timer = QTimer(self)
-        self._timer.setInterval(100)
+        self._timer.setInterval(20)
         self._timer.timeout.connect(self._homing_loop)
 
         self._load_config()
@@ -357,6 +358,7 @@ class HomingController(QObject):
         self._homing_active = True
         self._homing_rpm = abs(rpm)
         self._last_homing_cmd = ""
+        self._homing_initial_diff_sign = None  # Will be set on first motor command
         self._uni.lbl_live_encoder.setVisible(True)
         self._timer.start()
         logger.info("Homing STARTED — target encoder: %d, speed: %d RPM",
@@ -367,7 +369,7 @@ class HomingController(QObject):
         self._homing_active = False
         self._timer.stop()
         self._serial.send_cmd("STOP")
-        self._mw.daq_worker.set_motor_direction(0)
+        self.motor_direction_request.emit(0)
         self._uni.lbl_live_encoder.setVisible(False)
         logger.info("Homing STOPPED")
 
@@ -381,7 +383,7 @@ class HomingController(QObject):
 
         curr_mm = self.pulses_to_mm(curr)
         self._uni.lbl_live_encoder.setText(f"Live Position: {curr_mm:.4f} mm ({curr:,} pulses)")
-        if abs(diff) <= 500:
+        if abs(diff) <= 5000:
             self.stop_homing()
             logger.info("Homing COMPLETE — encoder at %d (target: %d)", curr, target)
             QMessageBox.information(self._mw, "Homing Complete",
@@ -401,20 +403,21 @@ class HomingController(QObject):
         if cmd != self._last_homing_cmd:
             self._serial.send_cmd(cmd)
             self._serial.send_cmd("START")
-            self._mw.daq_worker.set_motor_direction(dir_val) # Emit motor direction change
+            self.motor_direction_request.emit(dir_val)
             self._last_homing_cmd = cmd
             # The initial diff sign is used to detect if we've crossed the target.
             # This should be set when the motor *starts* moving in a particular direction.
             # If the command changes, the initial direction for this new segment of homing also changes.
             self._homing_initial_diff_sign = (diff > 0)
 
-        current_sign = (diff > 0)
-        if current_sign != self._homing_initial_diff_sign:
-            self.stop_homing()
-            logger.info("Homing COMPLETE (crossed target) — encoder at %d (target: %d)", curr, target)
-            QMessageBox.information(self._mw, "Homing Complete",
-                                    f"Home position reached!\n{curr_mm:.4f} mm ({curr:,} pulses)")
-            return
+        if self._homing_initial_diff_sign is not None:
+            current_sign = (diff > 0)
+            if current_sign != self._homing_initial_diff_sign:
+                self.stop_homing()
+                logger.info("Homing COMPLETE (crossed target) — encoder at %d (target: %d)", curr, target)
+                QMessageBox.information(self._mw, "Homing Complete",
+                                        f"Home position reached!\n{curr_mm:.4f} mm ({curr:,} pulses)")
+                return
 
 
 # =========================================================
@@ -423,11 +426,12 @@ class HomingController(QObject):
 class PreloadController(QObject):
     """Manages preload command sequencing for biaxial and uniaxial modes."""
 
-    def __init__(self, serial_handler, data_worker: 'SensorWorkerProtocol', daq_worker: 'SensorWorkerProtocol', main_window):
+    def __init__(self, serial_handler, data_worker: 'SensorWorkerProtocol', daq_worker: 'SensorWorkerProtocol', cdaq_worker: 'SensorWorkerProtocol', main_window):
         super().__init__(main_window)
         self._serial = serial_handler
         self._data_worker = data_worker
         self._daq_worker = daq_worker
+        self._cdaq_worker = cdaq_worker
         self._mw = main_window
         self._sequence_cmds: list[tuple[str, int]] = []
         self._target_load = 0.0
@@ -438,8 +442,9 @@ class PreloadController(QObject):
         self._target_load = target
         self._preload_type = f"Biaxial ({mode})"
         # Unfreeze plots when preload starts 
-        self._data_worker._freeze_plots = False
-        self._daq_worker._freeze_plots = False
+        self._data_worker.set_freeze_plots(False)
+        self._daq_worker.set_freeze_plots(False)
+        self._cdaq_worker.set_freeze_plots(False)
 
         if not self._serial.is_connected():
             QMessageBox.critical(self._mw, "Connection Error",
@@ -459,7 +464,7 @@ class PreloadController(QObject):
             self._sequence_cmds.append((f"VEL{i + 1}:{rpm}", 10))
             self._sequence_cmds.append((f"STARTM{i + 1}", 10))
 
-        self._data_worker.request_configure_preload(target, indices)
+        self._cdaq_worker.request_configure_preload(target, indices)
         self._process_commands()
 
     def start_uni_preload(self, target, rpm):
@@ -468,8 +473,8 @@ class PreloadController(QObject):
         self._preload_type = "Uniaxial"
         
         # Unfreeze plots when preload starts 
-        self._data_worker._freeze_plots = False
-        self._daq_worker._freeze_plots = False
+        self._data_worker.set_freeze_plots(False)
+        self._daq_worker.set_freeze_plots(False)
 
         if not self._serial.is_connected():
             QMessageBox.critical(self._mw, "Connection Error",
@@ -500,7 +505,7 @@ class PreloadController(QObject):
         )
 
     def handle_data_preload_finished(self):
-        """DataWorker detected biaxial preload target reached."""
+        """cDAQWorker detected biaxial preload target reached."""
         logger.info("Biaxial Preload sequence COMPLETE.")
         
         QMessageBox.information(
@@ -591,13 +596,15 @@ class RecordingController(QObject):
     recording_started = Signal()
     recording_stopped = Signal()
 
-    def __init__(self, main_window, data_worker: 'SensorWorkerProtocol', daq_controller, camera_panel):
+    def __init__(self, main_window, data_worker: 'SensorWorkerProtocol', daq_controller, cdaq_worker: 'SensorWorkerProtocol', camera_panel):
         super().__init__(main_window)
         self._mw = main_window
         self._data_worker = data_worker
         self._daq_ctrl = daq_controller
+        self._cdaq_worker = cdaq_worker
         self._camera = camera_panel
         self.current_save_dir = ""
+        self.manual_captures_dir = None
         self._is_recording = False
 
     def start_record(self):
@@ -648,8 +655,13 @@ class RecordingController(QObject):
 
         try:
             os.makedirs(self.current_save_dir, exist_ok=True)
+            
+            # Always create Manual captures folder for the test session
+            self.manual_captures_dir = os.path.join(self.current_save_dir, "Manual_Image_Captures")
+            os.makedirs(self.manual_captures_dir, exist_ok=True)
+
             if mw._save_images:
-                self.images_dir = os.path.join(self.current_save_dir, "Images")
+                self.images_dir = os.path.join(self.current_save_dir, "Auto_Record_Image_Captures")
                 os.makedirs(self.images_dir, exist_ok=True)
             else:
                 self.images_dir = None
@@ -670,7 +682,7 @@ class RecordingController(QObject):
         if mw._system_mode == "Uniaxial" and self._daq_ctrl.is_active:
             self._daq_ctrl.worker.request_start_recording(csv_path)
         else:
-            self._data_worker.request_start_recording(csv_path, mw._system_mode)
+            self._cdaq_worker.request_start_recording(csv_path, mw._system_mode)
 
         # Update UI
         mw.sensor_panel.set_recording_state(True)
@@ -695,6 +707,7 @@ class RecordingController(QObject):
 
         self._daq_ctrl.worker.stop_recording()
         self._data_worker.stop_recording()
+        self._cdaq_worker.stop_recording()
 
         mw.sensor_panel.set_recording_state(False)
         mw.dashboard_panel.bl_graph_combo.setEnabled(True)
@@ -706,6 +719,7 @@ class RecordingController(QObject):
             self._show_save_complete()
 
         self._is_recording = False
+        self.manual_captures_dir = None
         self.recording_stopped.emit()
 
     def _run_excel_export(self):
@@ -738,14 +752,16 @@ class RecordingController(QObject):
         """Called when Excel export completes successfully."""
         self._export_progress.close()
         self._show_save_complete()
-        self._export_thread.wait()
+        self._export_worker.deleteLater()
+        self._export_thread.deleteLater()
 
     def _on_export_error(self, error_msg):
         """Called when Excel export fails."""
         self._export_progress.close()
         logger.error("Excel export error: %s", error_msg)
         self._show_save_complete()
-        self._export_thread.wait()
+        self._export_worker.deleteLater()
+        self._export_thread.deleteLater()
 
     def _show_save_complete(self):
         """Show the recording saved popup."""
@@ -761,6 +777,96 @@ class RecordingController(QObject):
             f"{' and '.join(saved_items)} saved to:\n\n{self.current_save_dir}"
         )
         logger.info("Recording stopped. All files closed.")
+
+
+# =========================================================
+# CAPTURE CONTROLLER — manual single-image capture
+# =========================================================
+class CaptureController(QObject):
+    """Handles manual image capture: validation, folder creation, and save dispatch.
+    
+    Always saves to Manual_Captures/ subfolder inside the user's output folder,
+    regardless of whether a recording is active.
+    """
+
+    capture_success = Signal(str)   # Emits the saved file path
+    capture_error = Signal(str)     # Emits error message for status label
+
+    def __init__(self, main_window, camera_panel, dashboard_panel=None):
+        super().__init__(main_window)
+        self._mw = main_window
+        self._camera = camera_panel
+        self._dashboard = dashboard_panel
+
+    def capture_image(self):
+        """Validate conditions and dispatch a single frame capture."""
+        mw = self._mw
+
+        # --- VALIDATION 1: Camera stream must be live ---
+        if not self._camera.is_live():
+            QMessageBox.warning(
+                mw, "Camera Not Active",
+                "Camera stream is not active.\n\n"
+                "Please start the camera stream in the 'Image Setup' tab before capturing."
+            )
+            self.capture_error.emit("Stream not active")
+            return
+
+        # --- VALIDATION 2: Output folder must be set ---
+        if not mw._output_folder:
+            QMessageBox.warning(
+                mw, "No Save Location",
+                "No output folder selected.\n\n"
+                "Please set a save location in the 'Test Configuration' tab."
+            )
+            self.capture_error.emit("No save location")
+            return
+
+        # --- VALIDATION 3: Output folder must still exist ---
+        if not os.path.isdir(mw._output_folder):
+            QMessageBox.warning(
+                mw, "Save Location Invalid",
+                "The selected output folder no longer exists.\n\n"
+                "Please select a new save location in 'Test Configuration'."
+            )
+            self.capture_error.emit("Folder missing")
+            return
+
+        # --- Decide where to save based on recording state ---
+        # If currently recording, save inside that test's specific manual captures folder
+        if hasattr(mw, 'rec_ctrl') and mw.rec_ctrl._is_recording and mw.rec_ctrl.manual_captures_dir:
+            captures_dir = mw.rec_ctrl.manual_captures_dir
+        else:
+            # Otherwise use global fallback folder in output dir
+            captures_dir = os.path.join(mw._output_folder, "Manual_Image_Captures")
+            try:
+                os.makedirs(captures_dir, exist_ok=True)
+            except Exception as e:
+                QMessageBox.critical(
+                    mw, "Folder Creation Error",
+                    f"Failed to create captures folder:\n{e}"
+                )
+                self.capture_error.emit("Folder creation failed")
+                return
+
+        # --- Generate unique filename ---
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        microseconds = f"{time.time() % 1:.6f}"[2:]  # Extract fractional part
+        filename = f"capture_{timestamp}_{microseconds}.tiff"
+        save_path = os.path.join(captures_dir, filename)
+
+        # --- Brief button disable for feedback (200ms) on BOTH tabs ---
+        if hasattr(self._camera, 'btn_capture'):
+            self._camera.btn_capture.setEnabled(False)
+            QTimer.singleShot(200, lambda: self._camera.btn_capture.setEnabled(True))
+            
+        if self._dashboard and hasattr(self._dashboard, 'btn_capture_dash'):
+            self._dashboard.btn_capture_dash.setEnabled(False)
+            QTimer.singleShot(200, lambda: self._dashboard.btn_capture_dash.setEnabled(True))
+
+        # --- Dispatch capture to camera worker (thread-safe) ---
+        self._camera.worker.request_capture(save_path)
+        logger.info("Manual capture requested: %s", save_path)
 
 
 # =========================================================
@@ -834,6 +940,18 @@ class GraphController(QObject):
             self._dash._on_bl_graph_switch("Load vs Displacement")
             return
         self._bl_graph_mode = mode
+        
+        # If test is finished/idle but we have data in memory, instantly refresh the plot
+        if self._mw._time_data:
+            data = {
+                "mode": "Biaxial" if self._mw._sample_type == "Biaxial" else "Uniaxial",
+                "time": self._mw._time_data,
+                "uni_L": self._mw._load_data,
+                "uni_D": self._mw._disp_data,
+                "bi_L": self._mw._bi_load_data,
+                "_source": "internal_refresh"
+            }
+            self.update_graphs(data)
 
     def _get_cross_section_area(self):
         """Calculate cross-sectional area based on sample type."""
@@ -852,7 +970,8 @@ class GraphController(QObject):
 
         if data["mode"] == "Uniaxial":
             # Main sensor page curve (handled by MainWindow)
-            self._mw.uni_curve.setData(data["time"], data["uni_L"])
+            if self._mw.uni_curve is not None:
+                self._mw.uni_curve.setData(data["time"], data["uni_L"])
 
             if self.uni_curve is not None:
                 self.uni_curve.setData(data["time"], data["uni_L"])
@@ -874,7 +993,8 @@ class GraphController(QObject):
                 self.uni_dt_curve.setData(data["time"], uni_d)
         else:
             for i in range(4):
-                if i < len(data["bi_L"]):
-                    self._mw.bi_curves[i].setData(data["time"], data["bi_L"][i])
-                    if i < len(self.bi_curves):
+                if i < len(data["bi_L"]) and data["time"] and data["bi_L"][i]:
+                    if i < len(self._mw.bi_curves) and self._mw.bi_curves[i] is not None:
+                        self._mw.bi_curves[i].setData(data["time"], data["bi_L"][i])
+                    if i < len(self.bi_curves) and self.bi_curves[i] is not None:
                         self.bi_curves[i].setData(data["time"], data["bi_L"][i])

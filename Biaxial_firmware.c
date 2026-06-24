@@ -728,7 +728,18 @@ void I2C_Scan_Process(void) {
 
         case I2C_WAIT_DELAY:
             // Wait for sensor to prepare data
-            if (HAL_GetTick() - i2c_delay_start >= I2C_RESPONSE_DELAY_MS) {
+            if (HAL_GetTick() - i2c_delay_start >= 200) {
+                uint8_t addr = lc_slave_addresses[i2c_current_sensor];
+                HAL_I2C_Master_Abort_IT(&hi2c2, addr << 1);
+                sensor_loads[i2c_current_sensor] = 0.0f; // Unmask timeout error
+                i2c_current_sensor++;
+                if (i2c_current_sensor >= num_sensors) {
+                    i2c_state = I2C_IDLE;
+                    sensor_scan_complete = true;
+                } else {
+                    i2c_state = I2C_TX_CMD;
+                }
+            } else if (HAL_GetTick() - i2c_delay_start >= I2C_RESPONSE_DELAY_MS) {
                 uint8_t addr = lc_slave_addresses[i2c_current_sensor];
                 if (HAL_I2C_Master_Receive_IT(&hi2c2, addr << 1, i2c_raw_data, 4) == HAL_OK) {
                     i2c_state = I2C_RX_DATA;
@@ -738,6 +749,18 @@ void I2C_Scan_Process(void) {
 
         case I2C_RX_DATA:
             // Waiting for RxCpltCallback to fire
+            if (HAL_GetTick() - i2c_delay_start >= 200) {
+                uint8_t addr = lc_slave_addresses[i2c_current_sensor];
+                HAL_I2C_Master_Abort_IT(&hi2c2, addr << 1);
+                sensor_loads[i2c_current_sensor] = 0.0f; // Unmask timeout error
+                i2c_current_sensor++;
+                if (i2c_current_sensor >= num_sensors) {
+                    i2c_state = I2C_IDLE;
+                    sensor_scan_complete = true;
+                } else {
+                    i2c_state = I2C_TX_CMD;
+                }
+            }
             break;
 
         case I2C_WAIT_READY:
@@ -763,6 +786,8 @@ void HAL_I2C_MasterRxCpltCallback(I2C_HandleTypeDef *hi2c) {
         float val = u.f;
         if (!isinf(val) && !isnan(val)) {
             sensor_loads[i2c_current_sensor] = val;
+        } else {
+            sensor_loads[i2c_current_sensor] = 0.0f; // Unmask corrupted/NaN data error
         }
 
         // Move to next sensor

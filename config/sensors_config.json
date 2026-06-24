@@ -1,0 +1,41 @@
+{
+    "_comment": "Biaxial load cell calibration config for NI cDAQ-9174 + NI-9219.",
+    "_units": {
+        "sensitivity_vv": "V/V (Volts per Volt at full excitation)",
+        "intercept_n":    "Newtons — physical value at 0 V/V output (first_physical_val)",
+        "span_n":         "Newtons — physical value at sensitivity_vv output (second_physical_val)",
+        "sample_rate_hz": "Samples per second (hardware max for NI-9219: 100 S/s aggregate)"
+    },
+    "acquisition": {
+        "sample_rate_hz": 100,
+        "batch_size":     10
+    },
+    "sensor_0": {
+        "physical_channel": "ai0",
+        "name": "LC1",
+        "sensitivity_vv": 0.00081309,
+        "intercept_n": -226.25,
+        "span_n": 9773.75
+    },
+    "sensor_1": {
+        "physical_channel": "ai1",
+        "name": "LC2",
+        "sensitivity_vv": 0.00080917,
+        "intercept_n": 0.0,
+        "span_n": 10000.0
+    },
+    "sensor_2": {
+        "physical_channel": "ai2",
+        "name": "LC3",
+        "sensitivity_vv": 0.001,
+        "intercept_n": 0.0,
+        "span_n": 10000.0
+    },
+    "sensor_3": {
+        "physical_channel": "ai3",
+        "name": "LC4",
+        "sensitivity_vv": 0.001,
+        "intercept_n": 0.0,
+        "span_n": 10000.0
+    }
+}

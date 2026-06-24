@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton,
     QFormLayout, QMessageBox, QComboBox, QGroupBox, QSizePolicy,
     QGridLayout, QCheckBox, QStackedWidget, QListWidget, QStyle, QStyleOptionButton,
-    QSpinBox, QFrame
+    QSpinBox, QFrame, QScrollArea
 )
 from PySide6.QtCore import Qt, QTimer, QThread, Signal, Slot, QSize, QRect
 from PySide6.QtGui import QDoubleValidator, QIntValidator, QFont, QPixmap, QImage, QPainter, QPen, QColor
@@ -1155,6 +1155,7 @@ class SensorDisplayPanel(QWidget):
 class SampleInspectionPanel(QWidget):
     camera_error = Signal(str)  # Emitted on camera disconnect/error
     light_intensity_changed = Signal(float)  # Emitted with voltage (0.0-10.0)
+    capture_image_requested = Signal()  # Emitted when user clicks Capture Image
     def __init__(self):
         super().__init__()
         from gui import CameraWorker
@@ -1224,6 +1225,33 @@ class SampleInspectionPanel(QWidget):
         btn_layout.addWidget(self.btn_stop)
         controls_layout.addLayout(btn_layout)
 
+        # --- Image Capture Group ---
+        capture_group = QGroupBox("Image Capture")
+        capture_lay = QVBoxLayout(capture_group)
+        capture_lay.setSpacing(6)
+        capture_lay.setContentsMargins(12, 22, 12, 12)
+
+        self.btn_capture = QPushButton("Capture Image")
+        self.btn_capture.setCursor(Qt.PointingHandCursor)
+        self.btn_capture.setStyleSheet(
+            f"QPushButton {{ background-color: {PRIMARY_COLOR}; color: white; font-weight: bold; padding: 10px; }}"
+            f"QPushButton:hover {{ background-color: {ACCENT_COLOR}; }}"
+            f"QPushButton:disabled {{ background-color: #dfe6e9; color: #b2bec3; }}"
+        )
+        self.btn_capture.clicked.connect(self.capture_image_requested.emit)
+        capture_lay.addWidget(self.btn_capture)
+
+        self.lbl_capture_status = QLabel("Ready")
+        self.lbl_capture_status.setStyleSheet(
+            "color: #95a5a6; font-size: 14px; font-style: italic; padding: 2px 4px;"
+        )
+        self.lbl_capture_status.setAlignment(Qt.AlignCenter)
+        capture_lay.addWidget(self.lbl_capture_status)
+
+        controls_layout.addWidget(capture_group)
+
+        self._capture_count = 0  # Session capture counter
+
         from PySide6.QtWidgets import QSlider
 
         self.controls_group = QGroupBox("Camera Parameters")
@@ -1282,6 +1310,71 @@ class SampleInspectionPanel(QWidget):
 
         controls_layout.addWidget(self.controls_group)
 
+        # --- Scale Bar Group (inserted after Camera Parameters) ---
+        from scale_calibration import ZOOM_CALIBRATIONS
+
+        scale_bar_group = QGroupBox("Scale Bar")
+        sb_layout = QVBoxLayout(scale_bar_group)
+        sb_layout.setContentsMargins(12, 22, 12, 12)
+        sb_layout.setSpacing(10)
+
+        # Toggle checkbox — uses StyledCheckBox per codebase convention
+        self.chk_scale_bar = StyledCheckBox("Burn scale bar onto saved images")
+        sb_layout.addWidget(self.chk_scale_bar)
+
+        # Zoom selection row
+        zoom_row = QHBoxLayout()
+        lbl_zoom = QLabel("Lens Position:")
+        lbl_zoom.setStyleSheet("color: #2c3e50; font-weight: bold;")
+        self.cmb_zoom = QComboBox()
+        # Populate from ZOOM_CALIBRATIONS — dict insertion order = display order
+        for key in ZOOM_CALIBRATIONS:
+            self.cmb_zoom.addItem(key)
+        self.cmb_zoom.setCurrentText("1.0")   # default to 1.0
+        self.cmb_zoom.setEnabled(False)         # disabled until checkbox is checked
+        self.cmb_zoom.setCursor(Qt.PointingHandCursor)
+        zoom_row.addWidget(lbl_zoom)
+        zoom_row.addWidget(self.cmb_zoom)
+        zoom_row.addStretch()
+        sb_layout.addLayout(zoom_row)
+
+        # Preview label — shows what physical length the bar will represent
+        self.lbl_scale_preview = QLabel("Scale bar disabled")
+        self.lbl_scale_preview.setStyleSheet(
+            "color: #bdc3c7; font-style: italic; font-size: 14px;")
+        self.lbl_scale_preview.setAlignment(Qt.AlignCenter)
+        sb_layout.addWidget(self.lbl_scale_preview)
+
+        controls_layout.addWidget(scale_bar_group)
+
+        # Wire scale bar signals
+        self.chk_scale_bar.toggled.connect(self._on_scale_bar_toggled)
+        self.cmb_zoom.currentTextChanged.connect(self._on_zoom_changed)
+
+        # Block signals during restore to prevent redundant dispatches
+        self.chk_scale_bar.blockSignals(True)
+        self.cmb_zoom.blockSignals(True)
+
+        # Restore persisted settings
+        from settings import get_setting
+        _saved_enabled = get_setting("scale_bar_enabled", False)
+        _saved_zoom = get_setting("scale_bar_zoom_key", "1.0")
+        
+        self.chk_scale_bar.setChecked(_saved_enabled)
+        _zoom_idx = self.cmb_zoom.findText(_saved_zoom)
+        if _zoom_idx >= 0:
+            self.cmb_zoom.setCurrentIndex(_zoom_idx)
+            
+        # Re-enable zoom dropdown if scale bar was checked (normally handled by toggled slot)
+        self.cmb_zoom.setEnabled(_saved_enabled)
+
+        self.chk_scale_bar.blockSignals(False)
+        self.cmb_zoom.blockSignals(False)
+
+        # Single authoritative dispatch with the fully restored state
+        self._dispatch_scale_bar_config()
+        self._update_scale_preview()
+
         # --- Light Intensity Control (always enabled, independent of camera) ---
         light_group = QGroupBox("Light Intensity Control")
         light_layout = QVBoxLayout(light_group)
@@ -1318,7 +1411,47 @@ class SampleInspectionPanel(QWidget):
         self.status_lbl.setAlignment(Qt.AlignCenter)
         controls_layout.addWidget(self.status_lbl)
 
-        layout.addWidget(controls_container, stretch=1)
+        # Wrap controls_container in a QScrollArea so the panel can grow without
+        # clipping content when new control groups are added.
+        scroll_area = QScrollArea()
+        scroll_area.setWidget(controls_container)
+        scroll_area.setWidgetResizable(True)
+        scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        scroll_area.setFrameShape(QFrame.NoFrame)
+        scroll_area.setStyleSheet(f"""
+            QScrollArea {{
+                background-color: transparent;
+                border: none;
+            }}
+            QScrollArea > QWidget > QWidget {{
+                background-color: transparent;
+            }}
+            QScrollBar:vertical {{
+                background: transparent;
+                width: 6px;
+                border-radius: 3px;
+                margin: 0px;
+            }}
+            QScrollBar::handle:vertical {{
+                background: #bdc3c7;
+                border-radius: 3px;
+                min-height: 30px;
+            }}
+            QScrollBar::handle:vertical:hover {{
+                background: {PRIMARY_COLOR};
+            }}
+            QScrollBar::add-line:vertical,
+            QScrollBar::sub-line:vertical {{
+                height: 0px;
+                background: none;
+            }}
+            QScrollBar::add-page:vertical,
+            QScrollBar::sub-page:vertical {{
+                background: none;
+            }}
+        """)
+        layout.addWidget(scroll_area, stretch=1)
 
     def start_camera(self):
         """Start camera stream. Non-blocking — dispatches to worker thread."""
@@ -1456,6 +1589,37 @@ class SampleInspectionPanel(QWidget):
         self.status_lbl.setText(f"● LIVE | FPS: {fps:.2f}")
 
     @Slot(str)
+    def show_capture_success(self, path):
+        """Show success status with capture count after a manual image capture."""
+        self._capture_count += 1
+        timestamp = time.strftime("%H:%M:%S")
+        self.lbl_capture_status.setText(
+            f"\u2713 Image captured ({self._capture_count} total) \u2014 {timestamp}"
+        )
+        self.lbl_capture_status.setStyleSheet(
+            "color: #27ae60; font-size: 14px; font-weight: bold; padding: 2px 4px;"
+        )
+        # Auto-clear after 8 seconds
+        QTimer.singleShot(8000, self.reset_capture_status)
+
+    @Slot(str)
+    def show_capture_error(self, msg):
+        """Show error status on the capture status label."""
+        self.lbl_capture_status.setText(f"\u2717 {msg}")
+        self.lbl_capture_status.setStyleSheet(
+            "color: #c0392b; font-size: 14px; font-weight: bold; padding: 2px 4px;"
+        )
+        # Auto-clear after 5 seconds
+        QTimer.singleShot(5000, self.reset_capture_status)
+
+    def reset_capture_status(self):
+        """Reset capture status label to the default 'Ready' state."""
+        self.lbl_capture_status.setText("Ready")
+        self.lbl_capture_status.setStyleSheet(
+            "color: #95a5a6; font-size: 14px; font-style: italic; padding: 2px 4px;"
+        )
+
+    @Slot(str)
     def handle_error(self, msg):
         """Handle camera errors with double-shutdown protection."""
         logger.error("Camera handle_error received: %s (shutting_down=%s)", msg, self._shutting_down)
@@ -1467,6 +1631,81 @@ class SampleInspectionPanel(QWidget):
         self.status_lbl.setStyleSheet(
             "background-color: #c0392b; color: white; padding: 10px; font-weight: bold; border-radius: 4px;")
 
+    @Slot(bool)
+    def _on_scale_bar_toggled(self, checked: bool):
+        """
+        Enable/disable zoom dropdown and dispatch updated config to worker.
+        Connected to: self.chk_scale_bar.toggled
+        """
+        self.cmb_zoom.setEnabled(checked)
+        self._dispatch_scale_bar_config()
+        self._update_scale_preview()
+
+    @Slot(str)
+    def _on_zoom_changed(self, zoom_key: str):
+        """
+        Dispatch updated zoom key to worker and refresh preview label.
+        Connected to: self.cmb_zoom.currentTextChanged
+        """
+        self._dispatch_scale_bar_config()
+        self._update_scale_preview()
+
+    def _dispatch_scale_bar_config(self):
+        """
+        Read current toggle and zoom state, persist to settings, and send
+        to CameraWorker via the thread-safe set_scale_bar() dispatcher.
+        Must only be called from the main Qt GUI thread.
+        """
+        enabled = self.chk_scale_bar.isChecked()
+        zoom_key = self.cmb_zoom.currentText()
+
+        # Persist across sessions
+        from settings import set_setting
+        set_setting("scale_bar_enabled", enabled)
+        set_setting("scale_bar_zoom_key", zoom_key)
+
+        # Dispatch to worker thread via internal signal (thread-safe)
+        self.worker.set_scale_bar(enabled, zoom_key)
+
+    def _update_scale_preview(self):
+        """
+        Update the preview label to show the physical length the scale bar will
+        represent at the currently selected zoom, or appropriate status text.
+        Pure computation — no hardware calls. Safe to call anytime on GUI thread.
+        """
+        from scale_calibration import ZOOM_CALIBRATIONS, _CANDIDATE_LENGTHS_MM, _TARGET_BAR_FRACTION
+
+        if not self.chk_scale_bar.isChecked():
+            self.lbl_scale_preview.setText("Scale bar disabled")
+            self.lbl_scale_preview.setStyleSheet(
+                "color: #bdc3c7; font-style: italic; font-size: 14px;")
+            return
+
+        zoom_key = self.cmb_zoom.currentText()
+        entry = ZOOM_CALIBRATIONS.get(zoom_key)
+
+        if entry is None or entry.get("pixels_per_mm") is None:
+            self.lbl_scale_preview.setText(f"\u26a0  {zoom_key}: calibration pending")
+            self.lbl_scale_preview.setStyleSheet(
+                "color: #e67e22; font-style: italic; font-size: 14px;")
+            return
+
+        px_per_mm = entry["pixels_per_mm"]
+        image_width = 1920   # GS3-U3-23S6M-C native width (constant)
+        target_phys_mm = (image_width * _TARGET_BAR_FRACTION) / px_per_mm
+        clean_mm = min(_CANDIDATE_LENGTHS_MM, key=lambda c: abs(c - target_phys_mm))
+        bar_px = int(round(clean_mm * px_per_mm))
+
+        if clean_mm >= 1.0:
+            val = int(clean_mm) if clean_mm == int(clean_mm) else clean_mm
+            label = f"{val} mm"
+        else:
+            label = f"{int(round(clean_mm * 1000))} um"
+
+        self.lbl_scale_preview.setText(f"Bar = {label}  ({bar_px} px) at {zoom_key}")
+        self.lbl_scale_preview.setStyleSheet(
+            "color: #27ae60; font-style: normal; font-size: 14px;")
+
 
 # =========================================================
 # TEST DASHBOARD PANEL
@@ -1474,6 +1713,7 @@ class SampleInspectionPanel(QWidget):
 class TestDashboardPanel(QWidget):
     stop_all_requested = Signal()
     stop_rec_requested = Signal()
+    capture_requested = Signal()  # Manual image capture from dashboard
     bl_graph_changed = Signal(str)
 
     def __init__(self):
@@ -1600,6 +1840,34 @@ class TestDashboardPanel(QWidget):
             "color: #95a5a6; font-size: 12px; font-weight: bold; background: transparent;")
         self.side_rec_status_lbl.setAlignment(Qt.AlignCenter)
         sp_lay.addWidget(self.side_rec_status_lbl)
+
+        # Separator before capture
+        sep3 = QFrame()
+        sep3.setFrameShape(QFrame.HLine)
+        sep3.setStyleSheet("background-color: #dce1e5; max-height: 1px;")
+        sp_lay.addWidget(sep3)
+
+        # Capture Image button (teal — distinct from red emergency buttons)
+        self.btn_capture_dash = QPushButton("Capture\nImage")
+        self.btn_capture_dash.setStyleSheet(
+            f"QPushButton {{ background-color: {PRIMARY_COLOR}; color: white; font-weight: bold;"
+            f" padding: 8px 4px; font-size: 12px; border-radius: 4px; }}"
+            f"QPushButton:hover {{ background-color: {ACCENT_COLOR}; }}"
+            f"QPushButton:disabled {{ background-color: #dfe6e9; color: #b2bec3; }}")
+        self.btn_capture_dash.setMinimumHeight(40)
+        self.btn_capture_dash.setCursor(Qt.PointingHandCursor)
+        self.btn_capture_dash.clicked.connect(self.capture_requested.emit)
+        sp_lay.addWidget(self.btn_capture_dash)
+
+        # Capture status label (compact, matches side panel style)
+        self.side_capture_status_lbl = QLabel("Ready")
+        self.side_capture_status_lbl.setStyleSheet(
+            "color: #95a5a6; font-size: 11px; font-style: italic; background: transparent;")
+        self.side_capture_status_lbl.setAlignment(Qt.AlignCenter)
+        self.side_capture_status_lbl.setWordWrap(True)
+        sp_lay.addWidget(self.side_capture_status_lbl)
+
+        self._dash_capture_count = 0  # Session capture counter for dashboard
 
         sp_lay.addStretch()
 
@@ -1836,3 +2104,29 @@ class TestDashboardPanel(QWidget):
             self.plot_load_disp.setLabel('left', 'Load (N)', color='#2c2f33', size='16pt')
             self.plot_load_disp.setLabel('bottom', 'Displacement (mm)', color='#2c2f33', size='16pt')
         self.bl_graph_changed.emit(text)
+
+    @Slot(str)
+    def show_capture_success(self, path):
+        """Show compact capture success in dashboard side panel."""
+        self._dash_capture_count += 1
+        timestamp = time.strftime("%H:%M:%S")
+        self.side_capture_status_lbl.setText(
+            f"\u2713 Captured ({self._dash_capture_count})\n{timestamp}"
+        )
+        self.side_capture_status_lbl.setStyleSheet(
+            "color: #27ae60; font-size: 11px; font-weight: bold; background: transparent;")
+        QTimer.singleShot(8000, self.reset_capture_status)
+
+    @Slot(str)
+    def show_capture_error(self, msg):
+        """Show compact capture error in dashboard side panel."""
+        self.side_capture_status_lbl.setText(f"\u2717 {msg}")
+        self.side_capture_status_lbl.setStyleSheet(
+            "color: #c0392b; font-size: 11px; font-weight: bold; background: transparent;")
+        QTimer.singleShot(5000, self.reset_capture_status)
+
+    def reset_capture_status(self):
+        """Reset dashboard capture status to default."""
+        self.side_capture_status_lbl.setText("Ready")
+        self.side_capture_status_lbl.setStyleSheet(
+            "color: #95a5a6; font-size: 11px; font-style: italic; background: transparent;")

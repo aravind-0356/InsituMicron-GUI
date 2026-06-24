@@ -6,11 +6,11 @@ Stores user preferences in a JSON file in the application directory.
 
 import json
 import os
-from logging_config import get_app_dir, get_logger
+from logging_config import get_user_config_dir, get_logger
 
 logger = get_logger(__name__)
 
-SETTINGS_FILE = os.path.join(get_app_dir(), "settings.json")
+SETTINGS_FILE = os.path.join(get_user_config_dir(), "settings.json")
 
 # Default settings - used when no settings file exists or for new keys
 DEFAULT_SETTINGS = {
@@ -40,6 +40,14 @@ DEFAULT_SETTINGS = {
     "daq_disp_v_max": 10.0,
     "daq_disp_mm_min": 0.0,
     "daq_disp_mm_max": 10.0,
+
+    # Displacement safety limits (raw mm, uniaxial only)
+    "disp_safety_upper_mm": 9.5,
+    "disp_safety_lower_mm": 0.5,
+
+    # Scale bar
+    "scale_bar_enabled":  False,    # bool: whether to burn scale bar onto saved TIFFs
+    "scale_bar_zoom_key": "1.0",   # str: last selected zoom setting key
 }
 _cache: dict | None = None
 
@@ -79,8 +87,15 @@ def save_settings(settings):
     """
     global _cache
     try:
-        with open(SETTINGS_FILE, 'w', encoding='utf-8') as f:
+        import tempfile
+        import shutil
+        import os
+        
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(SETTINGS_FILE), suffix=".tmp")
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(settings, f, indent=2)
+        shutil.move(tmp, SETTINGS_FILE)
+        
         logger.debug("Settings saved to %s", SETTINGS_FILE)
         _cache = settings.copy()
         return True

@@ -55,11 +55,15 @@ def detect_daq_device():
         return None
     try:
         system = nidaqmx.system.System.local()
-        devices = system.devices
-        if devices:
-            dev_name = devices[0].name
-            logger.info("DAQ device detected: %s (%s)", dev_name, devices[0].product_type)
-            return dev_name
+        for dev in system.devices:
+            # Skip cDAQ chassis and modules (they belong to the Biaxial system)
+            if "cdaq" in dev.name.lower() or "cdaq" in dev.product_type.lower():
+                continue
+            if "9219" in dev.product_type:
+                continue
+                
+            logger.info("DAQ device detected: %s (%s)", dev.name, dev.product_type)
+            return dev.name
         return None
     except Exception as e:
         # Check for typical "DLL not found" errors
@@ -200,6 +204,10 @@ class DAQWorker(QObject):
     _run_diagnostic_requested = Signal() # Internal: run diagnostic on worker thread
     _start_recording_requested = Signal(str, str)
     _configure_preload_requested = Signal(float, list)
+    _reset_overload_requested = Signal()  # Internal: thread-safe overload latch reset
+
+    # Noise tolerance for displacement ratchet enforcement (mm)
+    _RATCHET_MARGIN = 0.05
 
     def __init__(self, serial_handler=None):
         super().__init__()
@@ -208,6 +216,7 @@ class DAQWorker(QObject):
         self._run_diagnostic_requested.connect(self.run_diagnostic_slot)
         self._start_recording_requested.connect(self.start_recording)
         self._configure_preload_requested.connect(self.configure_preload)
+        self._reset_overload_requested.connect(self.reset_overload_latch)
         self._data_lock = threading.Lock()
 
         # --- DAQ Configuration (loaded from settings) ---
@@ -287,7 +296,21 @@ class DAQWorker(QObject):
         self._overload_fired = False
         self._motor_direction = 0  # 1 (Compression), -1 (Tension), 0 (Stopped)
         
+        # --- Displacement Safety Guard ---
+        self._disp_upper_limit = settings.get("disp_safety_upper_mm", 9.5)
+        self._disp_upper_warned = False
+
+        self._disp_lower_limit = settings.get("disp_safety_lower_mm", 0.5)
+        self._disp_lower_warned = False
+
+        self._encoder_pos = 0
+        self._encoder_limit_warned = False
+
         self._freeze_plots = False
+
+    @Slot(bool)
+    def set_freeze_plots(self, freeze):
+        self._freeze_plots = freeze
 
     # =========================================================
     # CALIBRATION: Voltage → Engineering Units
@@ -356,6 +379,8 @@ class DAQWorker(QObject):
         # Dynamically update device name to the one found by the OS
         self._device_name = detected
         self._overload_fired = False  # Reset safety latch for new session
+        self._disp_upper_warned = False
+        self._disp_lower_warned = False
 
         try:
             self._setup_task()
@@ -366,14 +391,23 @@ class DAQWorker(QObject):
             self._acquisition_loop()
         except nidaqmx.errors.DaqError as e:
             self._running = False
+            self._cleanup_task()
             error_msg = f"DAQ Error: {e}"
             logger.error(error_msg)
             self.daq_error.emit(error_msg)
         except Exception as e:
             self._running = False
+            self._cleanup_task()
             error_msg = f"DAQ unexpected error: {e}"
             logger.error(error_msg)
             self.daq_error.emit(error_msg)
+
+    def _safe_stop(self):
+        """Safely send STOP command, guarding against None serial_handler."""
+        if self._serial is not None:
+            self._serial.send_cmd("STOP")
+        else:
+            logger.error("STOP command suppressed — no serial handler! Hardware may be unprotected.")
 
     def _setup_task(self):
         """Configure nidaqmx Task with differential channels and hardware timing."""
@@ -495,23 +529,73 @@ class DAQWorker(QObject):
                         pl_active = self._preload_active
                         pl_target = self._preload_target
                         
-                        current_val = self._load_filtered - self._load_offset
+                        current_val = self._load_filtered - self._load_offset  # tared
+                        raw_load = self._load_filtered                          # non-tared (hardware protection)
+                        
+                        motor_dir = self._motor_direction
+                        overload_already_fired = self._overload_fired
+                        
+                        is_pos_overload = (current_val >= 5000.0 or raw_load >= 5000.0) and motor_dir > 0
+                        is_neg_overload = (current_val <= -5000.0 or raw_load <= -5000.0) and motor_dir < 0
+                        
+                        overload_triggered = False
+                        if (is_pos_overload or is_neg_overload) and not overload_already_fired:
+                            self._overload_fired = True
+                            self._motor_direction = 0
+                            overload_triggered = True
 
                     # --- 5000N Hard Safety Limit ---
-                    # Only cut off if motor is actively driving DEEPER into the overload limits.
-                    # Compression Overload (>5000): Stop if driving positive (or unknown).
-                    # Tension Overload (<-5000): Stop if driving negative (or unknown).
-                    is_pos_overload = current_val >= 5000.0 and self._motor_direction >= 0
-                    is_neg_overload = current_val <= -5000.0 and self._motor_direction <= 0
+                    # Fires when the motor is ACTIVELY driving into the limit (strictly non-zero direction).
+                    # Checks BOTH tared (specimen protection) and raw/non-tared (hardware protection).
+                    # This prevents the load cell from being damaged even if the user has zeroed
+                    # at a large preload, which would shift the 'safe' displayed range beyond hardware limits.
+                    # Both STOP and popup are gated behind _overload_fired (fires once per motor start).
+                    
+                    if overload_triggered:
+                        self._safe_stop()
+                        limit_type = "COMPRESSION" if is_pos_overload else "TENSION"
+                        logger.warning("LOAD OVERLOAD (%s): tared=%.1f N, raw=%.1f N — STOP sent",
+                                       limit_type, current_val, raw_load)
+                        self.overload_detected.emit(
+                            f"OVERLOAD ({limit_type}): Safety Limit Reached!\n"
+                            f"Load (displayed): {current_val:.1f} N  |  Load (raw): {raw_load:.1f} N\n"
+                            f"Limit: \u00b15000.0 N"
+                        )
 
-                    if is_pos_overload or is_neg_overload:
-                        self._serial.send_cmd("STOP")
-                        self._motor_direction = 0  # Internal state update to reflect we stopped it
-                        # To prevent flooding the UI with popups, we check if we already fired it
-                        if not getattr(self, '_overload_fired', False):
-                            self._overload_fired = True
-                            limit_type = "COMPRESSION" if is_pos_overload else "TENSION"
-                            self.overload_detected.emit(f"OVERLOAD ({limit_type}): Safety Limit Reached!\nLoad {current_val:.1f} N exceeds 5000N bounds.")
+                    # --- Displacement Safety Guard (Uniaxial Only) ---
+                    # Operates on raw (non-tared) displacement.
+                    raw_disp = self._disp_filtered
+                    motor_dir = self._motor_direction
+
+                    # -- Upper Limit (> 9.5mm) --
+                    if raw_disp >= self._disp_upper_limit:
+                        if motor_dir > 0:  # Compression (positive) is BLOCKED
+                            self._safe_stop()
+                            with self._data_lock:
+                                self._motor_direction = 0
+                            if not self._disp_upper_warned:
+                                self._disp_upper_warned = True
+                                self.overload_detected.emit(
+                                    f"DISPLACEMENT LIMIT: Upper bound exceeded!\n"
+                                    f"Displacement: {raw_disp:.2f} mm (limit: {self._disp_upper_limit:.1f} mm)\n"
+                                    f"Please move in Tension (negative) direction to return to the safe range (0.5mm to 9.5mm non-tared)."
+                                )
+                        elif motor_dir < 0:
+                            self._disp_upper_warned = False
+                    else:
+                        self._disp_upper_warned = False
+
+                    # -- Lower Limit (< 0.5mm) --
+                    if raw_disp <= self._disp_lower_limit:
+                        # DO NOT STOP THE MOTOR. Just warn the user once.
+                        if not self._disp_lower_warned:
+                            self._disp_lower_warned = True
+                            self.overload_detected.emit(
+                                f"WARNING: Displacement sensor lost contact and lower safety limit exceeded!\n"
+                                f"Current: {raw_disp:.2f} mm. Safe range is 0.5mm to 9.5mm (non-tared)."
+                            )
+                    else:
+                        self._disp_lower_warned = False
 
                     # --- Break Detection (every sample, atomic flags) ---
                     if bd_enabled:
@@ -525,7 +609,7 @@ class DAQWorker(QObject):
                             if self._break_persist_count > 10:
                                 with self._data_lock:
                                     self._break_detection_enabled = False
-                                    self._serial.send_cmd("STOP")
+                                self._safe_stop()
                                 # Emit break signal — GUI slot will handle UI updates
                                 self.break_detected_stop.emit(
                                     f"Break Detected! Drop: {drop:.1f} N"
@@ -547,7 +631,7 @@ class DAQWorker(QObject):
                             if self._preload_persist_count >= 5:
                                 with self._data_lock:
                                     self._preload_active = False
-                                self._serial.send_cmd("STOP")
+                                self._safe_stop()
                                 logger.info("DAQ Preload target met via load cell.")
                                 self.preload_finished.emit()
                         else:
@@ -710,47 +794,45 @@ class DAQWorker(QObject):
     @Slot(str, str)
     def start_recording(self, csv_path, mode="Uniaxial"):
         """Start recording with CSV file. Called via signal from GUI thread."""
-        # NOTE: mode parameter accepted for SensorWorkerProtocol compliance.
-        # DAQWorker is always Uniaxial — the parameter is intentionally unused.
-        # Reset state
-        self._peak_load = 0.0
-        self._time_data.clear()
-        self._load_data.clear()
-        self._disp_data.clear()
-        self._load_med_buf.clear()
-        self._disp_med_buf.clear()
-        self._load_avg_buf.clear()
-        self._disp_avg_buf.clear()
-        self._load_running_sum = 0.0
-        self._disp_running_sum = 0.0
+        with self._data_lock:
+            self._peak_load = 0.0
+            self._time_data.clear()
+            self._load_data.clear()
+            self._disp_data.clear()
+            self._load_med_buf.clear()
+            self._disp_med_buf.clear()
+            self._load_avg_buf.clear()
+            self._disp_avg_buf.clear()
+            self._load_running_sum = 0.0
+            self._disp_running_sum = 0.0
 
-        # Initialize CSV Writer
-        self._csv_writer = DAQCSVWriter()
-        headers = ["Time(s)", "Load(N)", "Disp(mm)"]
+            self._csv_writer = DAQCSVWriter()
+            headers = ["Time(s)", "Load(N)", "Disp(mm)"]
 
-        if csv_path:
-            if not self._csv_writer.open_file(csv_path, headers):
-                logger.error("Failed to open DAQ CSV file")
-                return
-        else:
-            logger.info("DAQ recording started without CSV (images only)")
+            if csv_path:
+                if not self._csv_writer.open_file(csv_path, headers):
+                    logger.error("Failed to open DAQ CSV file")
+                    return
+            else:
+                logger.info("DAQ recording started without CSV (images only)")
 
-        self._start_time = time.time()
-        self._rec_sample_counter = 0
-        self._rec_total_snapshots = 0
-        self._is_recording = True
-        logger.info("DAQ recording started (Rate: %d Hz, Decimation: 1:%d)",
-                    self._sampling_rate, self._rec_decimation)
+            self._start_time = time.time()
+            self._rec_sample_counter = 0
+            self._rec_total_snapshots = 0
+            self._is_recording = True
+            logger.info("DAQ recording started (Rate: %d Hz, Decimation: 1:%d)",
+                        self._sampling_rate, self._rec_decimation)
 
     @Slot()
     def stop_recording(self):
         """Stop recording and close CSV file."""
-        self._is_recording = False
+        with self._data_lock:
+            self._is_recording = False
 
-        if self._csv_writer:
-            self._csv_writer.close_file()
-            self._csv_writer = None
-            logger.info("DAQ recording stopped")
+            if self._csv_writer:
+                self._csv_writer.close_file()
+                self._csv_writer = None
+                logger.info("DAQ recording stopped")
 
     def is_recording(self):
         """Return True if currently recording."""
@@ -780,7 +862,6 @@ class DAQWorker(QObject):
             if enabled:
                 self._peak_load = 0.0
                 self._break_persist_count = 0
-                self._overload_fired = False  # Reset safety latch on test start
                 logger.info("Break detection enabled (threshold: %.1f N)", threshold)
 
     @Slot(int)
@@ -795,7 +876,49 @@ class DAQWorker(QObject):
     def set_motor_direction(self, direction):
         """Update direction: 1 for positive, -1 for negative, 0 for stopped."""
         with self._data_lock:
-            self._motor_direction = direction
+            if direction != self._motor_direction:
+                self._motor_direction = direction
+                if direction != 0:
+                    self._disp_upper_warned = False
+                    self._disp_lower_warned = False
+                    self._encoder_limit_warned = False
+
+    @Slot(int)
+    def update_encoder_position(self, pos):
+        """Called every time the serial parser receives a new encoder pulse position."""
+        with self._data_lock:
+            self._encoder_pos = pos
+            motor_dir = self._motor_direction
+
+        # --- Encoder Hardware Limit ---
+        limit = -67008011
+        if pos <= limit:
+            if motor_dir < 0:  # Tension (negative) is BLOCKED
+                self._safe_stop()
+                with self._data_lock:
+                    self._motor_direction = 0
+                if not self._encoder_limit_warned:
+                    self._encoder_limit_warned = True
+                    self.overload_detected.emit(
+                        f"ENCODER HARDWARE LIMIT REACHED!\n"
+                        f"Position: {pos} (Limit: {limit})\n"
+                        f"Please actuate in Compression (positive) mode to return to safe limits."
+                    )
+            elif motor_dir > 0: # Compression allowed
+                self._encoder_limit_warned = False
+        else:
+            self._encoder_limit_warned = False
+
+    def request_reset_overload_latch(self):
+        """Thread-safe: emit signal to reset overload latch on DAQ thread."""
+        self._reset_overload_requested.emit()
+
+    @Slot()
+    def reset_overload_latch(self):
+        """Reset the load-cell overload latch. Runs on DAQ thread via signal."""
+        with self._data_lock:
+            self._overload_fired = False
+        logger.info("Overload latch cleared (reset_overload_latch)")
 
     @Slot()
     def zero_uni_load(self):

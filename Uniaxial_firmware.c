@@ -227,6 +227,18 @@ void HAL_UARTEx_RxEventCallback(UART_HandleTypeDef *huart, uint16_t Size) {
   }
 }
 
+/* UART Error callback — clears ORE/NE/FE flags so DMA can recover ----------*/
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) {
+    /* Clear all UART error flags (Overrun, Noise, Framing) */
+    __HAL_UART_CLEAR_OREFLAG(huart);
+    __HAL_UART_CLEAR_NEFLAG(huart);
+    __HAL_UART_CLEAR_FEFLAG(huart);
+    /* Signal main loop to re-arm the DMA listener */
+    g_dma_needs_restart = 1;
+  }
+}
+
 /* USER CODE END 0 */
 
 /**
@@ -309,8 +321,14 @@ int main(void) {
       HAL_UART_Transmit(&huart2, (uint8_t *)enc_msg, len, 10);
     }
 
-    /* DMA self-recovery: retry if ISR re-arm failed */
+    /* DMA self-recovery: retry if ISR re-arm failed or UART error occurred */
     if (g_dma_needs_restart) {
+      /* Abort any stuck DMA transfer before re-arming */
+      HAL_UART_AbortReceive(&huart1);
+      /* Clear UART error flags that may be blocking re-arm */
+      __HAL_UART_CLEAR_OREFLAG(&huart1);
+      __HAL_UART_CLEAR_NEFLAG(&huart1);
+      __HAL_UART_CLEAR_FEFLAG(&huart1);
       if (HAL_UARTEx_ReceiveToIdle_DMA(&huart1, modbus_rx_buffer,
                                        MODBUS_RX_BUFFER_SIZE) == HAL_OK) {
         __HAL_DMA_DISABLE_IT(&hdma_usart1_rx, DMA_IT_HT);

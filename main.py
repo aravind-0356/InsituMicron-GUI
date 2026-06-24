@@ -8,7 +8,7 @@ import sys
 import os
 
 # --- Version Information ---
-__version__ = "3.1.2"
+__version__ = "3.2"
 __app_name__ = "InsituMicron GUI"
 
 # =========================================================

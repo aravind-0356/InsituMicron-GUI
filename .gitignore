@@ -9,6 +9,7 @@ __pycache__/
 # Virtual environments
 .venv/
 venv/
+venv*/
 env/
 ENV/
 
@@ -43,11 +44,19 @@ pip_list.txt
 pip_list_audit.txt
 pip_list_utf8.txt
 
+# Scratch & test files
+agenst.md
+test_pdf.py
+dummy.png
+execution/test_output_stress_strain.png
+
 # Local config (contains user-specific paths)
 home_config.json
+settings.json
 
 # Large binary / data files (not suitable for Git)
 Data/
+*.pdf
 
 # NI documentation PDFs (link externally)
 NI_DAQ_USB_6001.pdf

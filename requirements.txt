@@ -13,6 +13,12 @@ openpyxl>=3.1.0
 # Camera (OpenCV) - for image saving
 opencv-python>=4.8.0
 
+# Material Analysis (Data Smoothing & Yield Computation)
+scipy>=1.10.0
+
+# PDF Generation
+reportlab>=4.0.0
+
 # PySpin is NOT included here - requires FLIR Spinnaker SDK installed separately.
 # nidaqmx requires the NI-DAQmx driver to be installed separately from ni.com.
 

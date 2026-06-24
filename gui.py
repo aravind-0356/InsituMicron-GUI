@@ -21,6 +21,8 @@ except ImportError:
     cv2 = None  # type: ignore[assignment]
     HAS_CV2 = False
 
+from scale_calibration import draw_scale_bar, ZOOM_CALIBRATIONS
+
 # --- PyQtGraph Imports ---
 import pyqtgraph as pg
 
@@ -40,9 +42,11 @@ from gui_test_views import (
     UniaxialMotorControlPanel, BiaxialMotorControlPanel, MotorControlPage,
     SensorDisplayPanel, SampleInspectionPanel, TestDashboardPanel
 )
+from gui_analysis import AnalysisReportingPanel
 from controllers import (
     ErrorManager, DAQController, HomingController,
-    PreloadController, RecordingController, GraphController
+    PreloadController, RecordingController, GraphController,
+    CaptureController
 )
 
 # --- Corporate Colors (centralized) ---
@@ -73,12 +77,18 @@ class ImageSaveWorker(QObject):
             try:
                 item = self.save_queue.get(timeout=0.1)
                 if item is None:
+                    self.save_queue.task_done()
                     break
 
-                img_data, path = item
+                img_data, path, scale_config = item   # 3-tuple: unpack scale_config
                 try:
+                    # Apply scale bar if config is present and valid
+                    if scale_config is not None:
+                        px_per_mm = scale_config.get("pixels_per_mm")
+                        if px_per_mm:
+                            img_data = draw_scale_bar(img_data, px_per_mm)
+
                     if cv2 is not None:
-                        # TIFF with NO COMPRESSION (1 = no compression in OpenCV)
                         cv2.imwrite(path, img_data, [cv2.IMWRITE_TIFF_COMPRESSION, 1])
                         self.images_saved += 1
                     else:
@@ -196,6 +206,7 @@ class CameraWorker(QObject):
     error_occurred = Signal(str)
     stats_updated = Signal(float)
     limits_ready = Signal(dict)
+    capture_saved = Signal(str)  # Emitted with file path after manual capture
 
     # --- Internal signals (dispatched TO the worker thread) ---
     _do_start_stream = Signal()
@@ -203,6 +214,10 @@ class CameraWorker(QObject):
     _do_set_exposure = Signal(float, bool)
     _do_set_black_level = Signal(float, bool)
     _do_set_gamma = Signal(float)
+    _do_capture_frame = Signal(str)  # Emits target file path for standalone capture
+    _do_set_scale_bar = Signal(bool, str)   # (enabled, zoom_key)
+    _do_start_recording = Signal(str)
+    _do_stop_recording = Signal()
 
     def __init__(self):
         super().__init__()
@@ -227,12 +242,28 @@ class CameraWorker(QObject):
         self._frame_count = 0
         self._last_fps_time = 0.0
 
+        # Standalone capture support (manual Capture Image button)
+        self._standalone_capture_path = None  # Set by request_capture(), consumed by _acquire_frame()
+        self._capture_lock = threading.Lock()  # Protects _standalone_capture_path
+
+        # Scale bar config (written only by _apply_scale_bar_config slot on worker thread,
+        # read only by _get_scale_config on the same worker thread — no lock needed)
+        self._scale_bar_enabled = False   # bool: GIL-atomic for simple bool assignment
+        self._scale_bar_zoom_key = ""     # str: GIL-atomic for simple str assignment
+        self._scale_bar_warned = False    # suppress repeated calibration warnings
+
+        self._recording_start_time = 0.0  # Time anchor for relative timestamps
+
         # Connect internal command signals to @Slot handlers
         self._do_start_stream.connect(self._start_stream)
         self._do_set_gain.connect(self._apply_gain)
         self._do_set_exposure.connect(self._apply_exposure)
         self._do_set_black_level.connect(self._apply_black_level)
         self._do_set_gamma.connect(self._apply_gamma)
+        self._do_capture_frame.connect(self._capture_single_frame)
+        self._do_set_scale_bar.connect(self._apply_scale_bar_config)
+        self._do_start_recording.connect(self._start_recording)
+        self._do_stop_recording.connect(self._stop_recording)
 
     # =========================================================
     # PUBLIC API (called from GUI thread — thread-safe dispatchers)
@@ -265,15 +296,11 @@ class CameraWorker(QObject):
 
     def start_recording(self, folder_path):
         """Thread-safe: start image recording to the specified folder."""
-        self.record_dir = folder_path
-        self.recording = True
-        self.save_worker.images_saved = 0  # Reset counter
-        logger.info("Camera recording STARTED - Folder: %s", folder_path)
+        self._do_start_recording.emit(folder_path)
 
     def stop_recording(self):
         """Thread-safe: stop image recording."""
-        self.recording = False
-        logger.info("Camera recording STOPPED - Total images saved: %d", self.save_worker.images_saved)
+        self._do_stop_recording.emit()
 
     @Slot()
     def trigger_save_snapshot(self):
@@ -281,6 +308,33 @@ class CameraWorker(QObject):
         if self.recording:
             with self.snapshot_lock:
                 self.snapshot_pending_count += 1
+
+    def request_capture(self, save_path):
+        """Thread-safe: request a standalone frame capture to save_path. Called from GUI thread."""
+        self._do_capture_frame.emit(save_path)
+
+    def set_scale_bar(self, enabled: bool, zoom_key: str):
+        """Thread-safe: dispatch scale bar config change to worker thread."""
+        self._do_set_scale_bar.emit(enabled, zoom_key)
+
+    @Slot(str)
+    def _start_recording(self, folder_path):
+        self.record_dir = folder_path
+        self._recording_start_time = time.time()
+        self.recording = True
+        self.save_worker.images_saved = 0
+        logger.info("Camera recording STARTED - Folder: %s", folder_path)
+
+    @Slot()
+    def _stop_recording(self):
+        self.recording = False
+        logger.info("Camera recording STOPPED - Total images saved: %d", self.save_worker.images_saved)
+
+    @Slot(str)
+    def _capture_single_frame(self, save_path):
+        """Set the standalone capture path. The next _acquire_frame iteration will consume it."""
+        with self._capture_lock:
+            self._standalone_capture_path = save_path
 
     # =========================================================
     # STREAM LIFECYCLE (runs on worker thread)
@@ -373,6 +427,39 @@ class CameraWorker(QObject):
             self.error_occurred.emit(f"Critical Error: {e}")
             self._cleanup()
 
+    def _get_scale_config(self):
+        """
+        Return a frozen scale bar config dict for injection into the save queue.
+        Returns None if scale bar is disabled or calibration is unavailable.
+
+        Called from _acquire_frame() on the worker thread.
+        Reads only worker-thread-owned attributes — no lock required.
+        The returned dict is a new object each call — safe to pass across threads.
+        """
+        if not self._scale_bar_enabled:
+            return None
+
+        entry = ZOOM_CALIBRATIONS.get(self._scale_bar_zoom_key)
+        if entry is None:
+            if not self._scale_bar_warned:
+                logger.warning("Scale bar: unknown zoom key '%s', suppressed", self._scale_bar_zoom_key)
+                self._scale_bar_warned = True
+            return None
+
+        px_per_mm = entry.get("pixels_per_mm")
+        if px_per_mm is None:
+            if not self._scale_bar_warned:
+                logger.warning("Scale bar: calibration pending for zoom '%s', suppressed",
+                               self._scale_bar_zoom_key)
+                self._scale_bar_warned = True
+            return None
+
+        # Return a new dict each call — this IS the frozen snapshot
+        return {
+            "pixels_per_mm": float(px_per_mm),
+            "zoom_key": self._scale_bar_zoom_key
+        }
+
     def _acquire_frame(self):
         """
         Acquire a single frame and reschedule. Cooperative acquisition loop.
@@ -415,14 +502,46 @@ class CameraWorker(QObject):
                         # Save all pending images
                         for i in range(pending):
                             try:
-                                # Use unique timestamp with microseconds
-                                filename = f"img_{time.time():.6f}.tiff"
+                                # Relative time since recording started, formatted as e.g. img_0012.345s.tiff
+                                t_rel = time.time() - self._recording_start_time
+                                
+                                # Prevent file overwrite collisions if 'pending' loop executes under 1 millisecond
+                                if i > 0:
+                                    filename = f"img_{t_rel:08.3f}s_{i}.tiff"
+                                else:
+                                    filename = f"img_{t_rel:08.3f}s.tiff"
+                                    
                                 full_path = os.path.join(self.record_dir, filename)
 
                                 save_copy = image_data.copy()
-                                self.save_queue.put((save_copy, full_path))
+                                scale_config = self._get_scale_config()
+                                self.save_queue.put((save_copy, full_path, scale_config))
                             except Exception as e:
                                 logger.error("Snapshot Queue Error: %s", e)
+
+                    # --- Standalone Manual Capture (Capture Image button) ---
+                    with self._capture_lock:
+                        capture_path = self._standalone_capture_path
+                        self._standalone_capture_path = None
+
+                    if capture_path:
+                        try:
+                            save_copy = image_data.copy()
+                            scale_config = self._get_scale_config()
+
+                            # If recording is active, override standard timestamp with relative time
+                            if self.recording:
+                                t_rel = time.time() - self._recording_start_time
+                                captures_dir = os.path.dirname(capture_path)
+                                filename = f"capture_{t_rel:08.3f}s.tiff"
+                                capture_path = os.path.join(captures_dir, filename)
+
+                            self.save_queue.put((save_copy, capture_path, scale_config))
+                            self.capture_saved.emit(capture_path)
+                            logger.info("Manual capture queued: %s", capture_path)
+                        except Exception as e:
+                            logger.error("Manual Capture Queue Error: %s", e)
+                            self.error_occurred.emit(f"Capture save failed: {e}")
 
                     if time.time() - self.last_display_time > 0.1:
                         stride = image_converted.GetStride()
@@ -609,6 +728,17 @@ class CameraWorker(QObject):
         except PySpin.SpinnakerException as e:
             logger.error("Set Gamma Error: %s", e)
 
+    @Slot(bool, str)
+    def _apply_scale_bar_config(self, enabled: bool, zoom_key: str):
+        """
+        Update scale bar config on the worker thread.
+        Runs on camera worker thread via _do_set_scale_bar signal dispatch.
+        """
+        self._scale_bar_enabled = enabled
+        self._scale_bar_zoom_key = zoom_key
+        self._scale_bar_warned = False   # reset so new config gets one fresh warning
+        logger.debug("Scale bar config updated: enabled=%s, zoom_key=%s", enabled, zoom_key)
+
 
 # =========================================================
 # DATA WORKER (CSV Streaming)
@@ -676,6 +806,7 @@ class DataWorker(QObject):
         # Max buffer size for plot data (prevents memory leak)
         # 10000 samples = ~16 minutes at 10 Hz, ~83 minutes at 2 Hz
         self._max_plot_buffer_size = 10000
+        self._plot_lock = threading.Lock()
 
         # --- Preload Logic State ---
         self._preload_active = False
@@ -855,15 +986,15 @@ class DataWorker(QObject):
                 self.last_ui_update = current_time
 
             if current_time - self.last_plot_update >= 0.1 and not self._freeze_plots:
-                plot_data = {
-                    # _source: "serial" — see comment on ui_update above.
-                    "_source": "serial",
-                    "mode": self._system_mode,
-                    "time": self._time_data.copy(),
-                    "uni_L": self._load_data.copy(),
-                    "uni_D": self._disp_data.copy(),
-                    "bi_L": [ch.copy() for ch in self._bi_load_data]
-                }
+                with self._plot_lock:
+                    plot_data = {
+                        "_source": "serial",
+                        "mode": self._system_mode,
+                        "time": self._time_data.copy(),
+                        "uni_L": self._load_data.copy(),
+                        "uni_D": self._disp_data.copy(),
+                        "bi_L": [ch.copy() for ch in self._bi_load_data]
+                    }
                 self.plot_update.emit(plot_data)
                 self.last_plot_update = current_time
 
@@ -879,16 +1010,17 @@ class DataWorker(QObject):
             d = self._uni_disp_filtered - self._uni_disp_offset
 
             # Add to plot buffers
-            self._time_data.append(t_rel)
-            self._load_data.append(l)
-            self._disp_data.append(d)
-            
-            # Rolling window: trim buffers if too large to prevent memory leak
-            if len(self._time_data) > self._max_plot_buffer_size:
-                trim_count = self._max_plot_buffer_size // 5  # Remove oldest 20%
-                self._time_data = self._time_data[trim_count:]
-                self._load_data = self._load_data[trim_count:]
-                self._disp_data = self._disp_data[trim_count:]
+            with self._plot_lock:
+                self._time_data.append(t_rel)
+                self._load_data.append(l)
+                self._disp_data.append(d)
+                
+                # Rolling window: trim buffers if too large to prevent memory leak
+                if len(self._time_data) > self._max_plot_buffer_size:
+                    trim_count = self._max_plot_buffer_size // 5  # Remove oldest 20%
+                    self._time_data = self._time_data[trim_count:]
+                    self._load_data = self._load_data[trim_count:]
+                    self._disp_data = self._disp_data[trim_count:]
 
             # STREAM TO CSV immediately - halt on failure to prevent data loss
             if self.csv_writer and self.csv_writer.is_open:
@@ -898,17 +1030,18 @@ class DataWorker(QObject):
                     return
         else:
             # Add to plot buffers
-            self._time_data.append(t_rel)
-            for i in range(4):
-                val = self._bi_loads_filtered[i] - self._bi_offsets[i]
-                self._bi_load_data[i].append(val)
-            
-            # Rolling window: trim buffers if too large to prevent memory leak
-            if len(self._time_data) > self._max_plot_buffer_size:
-                trim_count = self._max_plot_buffer_size // 5  # Remove oldest 20%
-                self._time_data = self._time_data[trim_count:]
+            with self._plot_lock:
+                self._time_data.append(t_rel)
                 for i in range(4):
-                    self._bi_load_data[i] = self._bi_load_data[i][trim_count:]
+                    val = self._bi_loads_filtered[i] - self._bi_offsets[i]
+                    self._bi_load_data[i].append(val)
+                
+                # Rolling window: trim buffers if too large to prevent memory leak
+                if len(self._time_data) > self._max_plot_buffer_size:
+                    trim_count = self._max_plot_buffer_size // 5  # Remove oldest 20%
+                    self._time_data = self._time_data[trim_count:]
+                    for i in range(4):
+                        self._bi_load_data[i] = self._bi_load_data[i][trim_count:]
 
             # STREAM TO CSV immediately - halt on failure to prevent data loss
             if self.csv_writer and self.csv_writer.is_open:
@@ -919,7 +1052,7 @@ class DataWorker(QObject):
                     return
 
         # Trigger image save
-        self.request_image_save.emit()
+        QMetaObject.invokeMethod(self, "request_image_save", Qt.ConnectionType.QueuedConnection)
 
     def _recording_loop(self):
         start_time = time.time()
@@ -950,10 +1083,11 @@ class DataWorker(QObject):
         # Reset state
         self._peak_loads = [0.0, 0.0, 0.0, 0.0]
         self._break_triggered_axes = {"X": False, "Y": False}
-        self._time_data.clear()
-        self._load_data.clear()
-        self._disp_data.clear()
-        for l in self._bi_load_data: l.clear()
+        with self._plot_lock:
+            self._time_data.clear()
+            self._load_data.clear()
+            self._disp_data.clear()
+            for l in self._bi_load_data: l.clear()
         
         # Clear median buffers
         self._uni_med_buf = collections.deque(maxlen=3)
@@ -992,7 +1126,7 @@ class DataWorker(QObject):
         """Stop recording and close CSV file"""
         self._is_recording = False
         if self._rec_thread:
-            self._rec_thread.join(timeout=1.0)
+            self._rec_thread.join(timeout=max(3.0, 2.0 / max(1, self._sampling_rate)))
 
         # Close CSV file
         if self.csv_writer:
@@ -1007,6 +1141,10 @@ class DataWorker(QObject):
     def get_current_load(self):
         """Best-effort snapshot of current load for preload direction detection."""
         return self._uni_load_filtered - self._uni_load_offset
+
+    @Slot(bool)
+    def set_freeze_plots(self, freeze):
+        self._freeze_plots = freeze
 
     @Slot(str)
     def set_mode(self, mode):
@@ -1099,6 +1237,13 @@ class MainWindow(QMainWindow):
         self.daq_worker.moveToThread(self.daq_thread)
         self.daq_thread.start()
 
+        # --- CDAQ Worker Thread (NI cDAQ-9174 — Biaxial sensor data) ---
+        from cdaq_handler import CDAQWorker
+        self.cdaq_thread = QThread()
+        self.cdaq_worker = CDAQWorker(serial_handler=self.serial_handler)
+        self.cdaq_worker.moveToThread(self.cdaq_thread)
+        self.cdaq_thread.start()
+
         self._is_connected = False
         self._system_mode = "Uniaxial"
 
@@ -1145,6 +1290,21 @@ class MainWindow(QMainWindow):
         self.daq_worker.recording_error.connect(self.handle_recording_error)
         self.daq_worker.overload_detected.connect(self.handle_overload_stop)
 
+        # Connect CDAQ worker signals to UI handlers
+        self.cdaq_worker.ui_update.connect(self.update_labels)
+        self.cdaq_worker.plot_update.connect(self.update_graphs)
+        self.cdaq_worker.break_detected_stop.connect(self.handle_break_stop)
+        self.cdaq_worker.recording_error.connect(self.handle_recording_error)
+        self.cdaq_worker.overload_detected.connect(self.handle_overload_stop)
+        self.cdaq_worker.daq_error.connect(lambda msg: self.error_mgr.collect("CDAQ", msg))
+        
+        # Auto-start and Hot-plug polling for cDAQ
+        self.cdaq_poll_timer = QTimer(self)
+        self.cdaq_poll_timer.setInterval(3000)
+        self.cdaq_poll_timer.timeout.connect(self._auto_start_cdaq)
+        self.cdaq_poll_timer.start()
+        QTimer.singleShot(1000, self._auto_start_cdaq)
+
         # Connect folder selection and save options signals
         self.sample_panel.output_folder_changed.connect(self.set_output_folder)
         self.sample_panel.save_sensor_changed.connect(self.set_save_sensor)
@@ -1166,9 +1326,22 @@ class MainWindow(QMainWindow):
 
         self.dashboard_panel = TestDashboardPanel()
 
+        # --- Capture Controller (manual single-image capture) ---
+        self.capture_ctrl = CaptureController(self, self.camera_panel, self.dashboard_panel)
+        self.camera_panel.capture_image_requested.connect(self.capture_ctrl.capture_image)
+        self.capture_ctrl.capture_success.connect(self.camera_panel.show_capture_success)
+        self.capture_ctrl.capture_error.connect(self.camera_panel.show_capture_error)
+        # Wire CameraWorker's capture_saved signal → CaptureController's success signal
+        self.camera_panel.worker.capture_saved.connect(self.capture_ctrl.capture_success)
+
         self.camera_panel.worker.image_received.connect(self.dashboard_panel.update_image)
         self.dashboard_panel.stop_all_requested.connect(lambda: self.serial_handler.send_cmd("STOP"))
         self.dashboard_panel.stop_rec_requested.connect(self.stop_record)
+
+        # Dashboard capture button → same CaptureController (shared backend)
+        self.dashboard_panel.capture_requested.connect(self.capture_ctrl.capture_image)
+        self.capture_ctrl.capture_success.connect(self.dashboard_panel.show_capture_success)
+        self.capture_ctrl.capture_error.connect(self.dashboard_panel.show_capture_error)
 
         # --- Graph Controller ---
         self.graph_ctrl = GraphController(self, self.dashboard_panel)
@@ -1195,10 +1368,14 @@ class MainWindow(QMainWindow):
         # DAQ worker zero connections (Uniaxial mode)
         self.sensor_panel.set_zero_uni_load.connect(self.daq_worker.zero_uni_load)
         self.sensor_panel.set_zero_uni_disp.connect(self.daq_worker.zero_uni_disp)
+        
+        # CDAQ worker zero connections (Biaxial mode)
+        self.sensor_panel.set_zero_bi_single.connect(self.cdaq_worker.zero_bi_single)
+        self.sensor_panel.set_zero_bi_all.connect(self.cdaq_worker.zero_bi_all)
 
         # --- Recording Controller ---
         self.rec_ctrl = RecordingController(
-            self, self.data_worker, self.daq_ctrl, self.camera_panel
+            self, self.data_worker, self.daq_ctrl, self.cdaq_worker, self.camera_panel
         )
         self.sensor_panel.request_start_rec.connect(self.start_record)
         self.sensor_panel.request_stop_rec.connect(self.stop_record)
@@ -1206,17 +1383,18 @@ class MainWindow(QMainWindow):
 
         self.sensor_panel.break_detection_changed.connect(self.data_worker.set_break_detection)
         self.sensor_panel.break_detection_changed.connect(self.daq_worker.set_break_detection)
+        self.sensor_panel.break_detection_changed.connect(self.cdaq_worker.set_break_detection)
 
         # --- Preload Controller ---
         self.preload_ctrl = PreloadController(
-            self.serial_handler, self.data_worker, self.daq_worker, self
+            self.serial_handler, self.data_worker, self.daq_worker, self.cdaq_worker, self
         )
         self.bi_control.preload_start.connect(self.preload_ctrl.start_preload)
         self.bi_control.preload_stop.connect(lambda: self.serial_handler.send_cmd("PRESTOP"))
         self.uni_control.preload_start.connect(self.preload_ctrl.start_uni_preload)
         self.uni_control.preload_stop.connect(lambda: self.serial_handler.send_cmd("STOP"))
         self.daq_worker.preload_finished.connect(self.preload_ctrl.handle_daq_preload_finished)
-        self.data_worker.preload_finished.connect(self.preload_ctrl.handle_data_preload_finished)
+        self.cdaq_worker.preload_finished.connect(self.preload_ctrl.handle_data_preload_finished)
 
         # Connect motor start signals for sync recording
         self.uni_control.motor_started.connect(self.handle_motor_started)
@@ -1225,6 +1403,7 @@ class MainWindow(QMainWindow):
 
         self.sensor_panel.sampling_rate_changed.connect(self.data_worker.update_sampling_rate)
         self.sensor_panel.sampling_rate_changed.connect(self.daq_worker.update_sampling_rate)
+        self.sensor_panel.sampling_rate_changed.connect(self.cdaq_worker.update_sampling_rate)
 
         # --- Homing Controller ---
         self.homing_ctrl = HomingController(
@@ -1235,6 +1414,8 @@ class MainWindow(QMainWindow):
         self.uni_control.go_home.connect(self.homing_ctrl.start_homing)
         self.uni_control.cancel_home.connect(self.homing_ctrl.stop_homing)
         self.data_worker.encoder_updated.connect(self.homing_ctrl.on_encoder_updated)
+        self.data_worker.encoder_updated.connect(self.daq_worker.update_encoder_position)
+        self.homing_ctrl.motor_direction_request.connect(self.daq_worker.set_motor_direction)
 
         self.setup_layout()
 
@@ -1279,7 +1460,7 @@ class MainWindow(QMainWindow):
             "font-weight: bold; font-size: 22px; color: #2c3e50; margin-left: 15px; margin-bottom: 10px;")
 
         self.sidebar = QListWidget()
-        self.sidebar.addItems(["Connection", "Test Configuration", "Test Setup", "Image Setup", "Test Dashboard"])
+        self.sidebar.addItems(["Connection", "Test Configuration", "Test Setup", "Image Setup", "Test Dashboard", "Analysis & Reporting"])
         # FIXED: Increased sidebar font size to 20px
         self.sidebar.setStyleSheet(f"""
             QListWidget {{ background-color: transparent; border: none; font-size: 20px; }}
@@ -1357,6 +1538,9 @@ class MainWindow(QMainWindow):
 
         self.pages.addWidget(self.dashboard_panel)
 
+        self.analysis_panel = AnalysisReportingPanel()
+        self.pages.addWidget(self.analysis_panel)
+
         content_layout.addWidget(self.pages)
 
         layout.addWidget(self.sidebar_drawer)
@@ -1373,12 +1557,18 @@ class MainWindow(QMainWindow):
         Delegates to motor_page.on_switch which updates Test Setup and chains to switch_mode."""
         self.motor_page.on_switch(mode)
 
+    def _auto_start_cdaq(self):
+        """Auto-detect and start Biaxial cDAQ if disconnected."""
+        if hasattr(self, 'cdaq_worker') and not self.cdaq_worker.is_acquiring():
+            self.cdaq_worker.request_start(silent=True)
+
     def switch_mode(self, mode):
         """Switch between Uniaxial and Biaxial modes."""
         self._system_mode = mode
         self.sensor_panel.set_mode(mode)
         self.graph_stack.setCurrentIndex(0 if mode == "Uniaxial" else 1)
         self.data_worker.set_mode(mode)
+        self.cdaq_worker.set_mode(mode)
 
         # Delegate dashboard curve recreation to GraphController
         self.graph_ctrl.setup_curves(mode)
@@ -1424,10 +1614,14 @@ class MainWindow(QMainWindow):
         # Unfreeze plots when motor is manually started again
         self.data_worker._freeze_plots = False
         self.daq_ctrl.worker._freeze_plots = False
+        self.cdaq_worker._freeze_plots = False
         
-        # Reset safety latches so the user gets notified if overload happens again
+        # Reset load-cell overload latch so the user gets notified if overload happens again.
+        # DataWorker is serial-thread safe (GIL covers simple bool assignment).
+        # DAQWorker reset is dispatched via its internal signal so it runs on the DAQ
+        # thread under _data_lock — avoids cross-thread write race condition.
         self.data_worker._overload_fired = False
-        self.daq_ctrl.worker._overload_fired = False
+        self.daq_ctrl.worker.request_reset_overload_latch()
 
         is_rec = getattr(self.rec_ctrl, '_is_recording', False)
         logger.debug("handle_motor_started called. Enabled: %s, Recording: %s", self._sync_record_enabled, is_rec)
@@ -1441,8 +1635,11 @@ class MainWindow(QMainWindow):
     @Slot(dict)
     def update_labels(self, data):
         # Ignore serial-sourced data when DAQ is active
-        if data.get("_source") == "serial" and self.daq_ctrl.is_active:
-            return
+        if data.get("_source") == "serial":
+            if self._system_mode == "Uniaxial" and self.daq_ctrl.is_active:
+                return
+            if self._system_mode == "Biaxial" and self.cdaq_worker.is_acquiring():
+                return
         self.homing_ctrl.current_raw_disp = data["uni_disp"] + data["uni_zero_D"]
 
         self.sensor_panel.update_uni(data["uni_load"], data["uni_disp"])
@@ -1476,6 +1673,7 @@ class MainWindow(QMainWindow):
         # Freeze plotting so the break event doesn't scroll offscreen
         self.data_worker._freeze_plots = True
         self.daq_ctrl.worker._freeze_plots = True
+        self.cdaq_worker._freeze_plots = True
         
         if getattr(self.rec_ctrl, '_is_recording', False):
              self.stop_record()
@@ -1488,8 +1686,8 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def handle_overload_stop(self, msg):
         """
-        Handler for firmware overload protection.
-        Shows a warning popup when the microcontroller detects overload and stops motors.
+        Handler for firmware and software overload protection (Load and Displacement).
+        Shows a warning popup when an overload limit is detected and stops motors.
         """
         logger.warning("OVERLOAD PROTECTION TRIGGERED: %s", msg)
         # Update status labels
@@ -1500,8 +1698,13 @@ class MainWindow(QMainWindow):
         # Freeze plotting so the overload event doesn't scroll offscreen
         self.data_worker._freeze_plots = True
         self.daq_ctrl.worker._freeze_plots = True
+        self.cdaq_worker._freeze_plots = True
         
-        footer = "Please check the load cell readings and reduce the applied force before resuming operations."
+        if "DISPLACEMENT" in msg:
+            footer = "Reverse the motor direction to return within the safe displacement range."
+        else:
+            footer = "Please check the load cell readings and reduce the applied force before resuming operations."
+            
         if getattr(self.rec_ctrl, '_is_recording', False):
              self.stop_record()
              footer += "\n\nData recording and live plotting have been stopped."
@@ -1511,8 +1714,8 @@ class MainWindow(QMainWindow):
         # Show warning popup with overload details
         QMessageBox.warning(
             self,
-            "⚠️ Overload Protection Triggered",
-            f"The firmware has stopped all motors due to overload protection.\n\n"
+            "⚠️ Safety Protection Triggered",
+            f"The system has stopped the motor due to a safety limit.\n\n"
             f"{msg}\n\n"
             f"{footer}"
         )
@@ -1563,7 +1766,7 @@ class MainWindow(QMainWindow):
             self.light_ctrl.shutdown()
 
         # Stop recording first — flushes CSV and joins _rec_thread before any thread is killed
-        if self.data_worker.is_recording() or self.daq_ctrl.worker.is_recording():
+        if self.data_worker.is_recording() or self.daq_ctrl.worker.is_recording() or (hasattr(self, 'cdaq_worker') and self.cdaq_worker.is_recording()):
             self.rec_ctrl.stop_record()
 
         # Stop DAQ acquisition and polling
@@ -1580,8 +1783,16 @@ class MainWindow(QMainWindow):
             self.daq_thread.quit()
             self.daq_thread.wait()
 
+        if hasattr(self, 'cdaq_worker'):
+            self.cdaq_worker.stop_acquisition()
+        if hasattr(self, 'cdaq_thread'):
+            self.cdaq_thread.quit()
+            self.cdaq_thread.wait()
+
         if hasattr(self, 'camera_panel') and hasattr(self.camera_panel, '_cam_thread'):
             if self.camera_panel._cam_thread.isRunning():
                 self.camera_panel.shutdown_camera()
+                self.camera_panel._cam_thread.quit()
+                self.camera_panel._cam_thread.wait(5000)
 
         e.accept()

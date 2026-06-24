@@ -1,7 +1,15 @@
-# InsituMicron GUI — v3.1.2
+# InsituMicron GUI — v3.2
 
 > Desktop control & data acquisition GUI for the **InsituMicron in-situ mechanical testing system**.  
 > Deployed at **IIT Patna** for the Uniaxial mechanical test rig.
+
+---
+
+## Releases & Download
+
+Pre-compiled standard installers for Windows are distributed via GitHub Releases.
+- Visit the [Releases](https://github.com/aravind-0356/InsituMicron-GUI/releases) page to download the latest setup installer (`InsituMicron_GUI_v3.2_Setup.exe`).
+- Run the installer to install the desktop application. Administrator access is no longer required to run the application (settings are saved to `%APPDATA%`).
 
 ---
 
@@ -19,7 +27,7 @@
 
 ## Key Changes from V2.1.1
 
-| Area | V2.1.1 (IIT Jammu) | V3.1.2 (IIT Patna) |
+| Area | V2.1.1 (IIT Jammu) | V3.2 (IIT Patna) |
 |------|-------------------|-------------------|
 | **Primary sensor interface** | STM32 + ADS1115 (I2C ADC), streamed over serial | NI-DAQ USB-6001 hardware-timed acquisition via `nidaqmx` |
 | **Load channel** | ADS1115 on STM32, serial packet | NI-DAQ AI0 (differential), ±5V, calibrated via linear interpolation |
@@ -119,7 +127,7 @@ All DAQ parameters are user-configurable via the Settings tab and persisted in `
 
 ---
 
-## Safety Features (New in V3.1.2)
+## Safety Features (New in V3.2)
 
 | Feature | Mechanism |
 |---------|-----------|
@@ -196,12 +204,25 @@ Key dependencies:
 
 ## Setup & Run
 
-```bash
-python -m venv .venv
-.venv\Scripts\activate
-pip install -r requirements.txt
-python main.py
-```
+1. **Create and Activate Virtual Environment (Python 3.10)**:
+   ```bash
+   python -m venv venv310
+   venv310\Scripts\activate
+   ```
+2. **Install Standard Dependencies**:
+   ```bash
+   pip install -r requirements.txt
+   ```
+3. **Install Spinnaker SDK & PySpin** (For FLIR camera support):
+   - Install the FLIR Spinnaker SDK driver.
+   - Download the PySpin wheel matching Python 3.10 and install it manually:
+     ```bash
+     pip install spinnaker_python-3.10.0.121-cp310-cp310-win_amd64.whl
+     ```
+4. **Run the Application**:
+   ```bash
+   python main.py
+   ```
 
 ---
 
@@ -219,7 +240,7 @@ pyinstaller build.spec
 | Version | Branch | Deployment | Notes |
 |---------|--------|------------|-------|
 | v2.1.1 | `v2.1.1` | IIT Jammu | STM32 serial DAQ (ADS1115), Biaxial + Uniaxial |
-| **v3.1.2** | `v3.1.2` | IIT Patna | NI-DAQ USB-6001, stress-strain graphs, light intensity control, refactored architecture |
+| **v3.2** | `v3.2` | IIT Patna | NI-DAQ USB-6001, stress-strain graphs, light intensity control, refactored architecture |
 
 ---
 
