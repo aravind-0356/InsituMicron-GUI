@@ -5,9 +5,22 @@ All notable changes to the InsituMicron GUI will be documented in this file.
 ## [3.2.0] — 2026-06-24
 
 ### Added
-- **Stress vs. Strain Plotting**: Added a dropdown selector in the dashboard to switch between Load vs. Displacement and Stress vs. Strain plots. Added configuration for sample geometry parameters (cross-sectional area, gauge length) for rectangular/cylindrical samples.
+- **Analysis & Reporting Page**: Added a comprehensive analysis tab linked to a stateless mathematics engine (`MaterialAnalysisEngine`) with the following features:
+  - **Specimen Parameter Settings**: Real-time cross-sectional area (mm²) and gauge length (mm) configurations.
+  - **Automated Property Extraction**: Computes Young's Modulus, 0.2% Offset Yield Strength, Ultimate Tensile Strength (UTS), and Break Stress.
+  - **Interactive Modulus Selector**: Renders a draggable shaded linear region overlaying the elastic range on the plot. Dragging the region allows the operator to manually override the elastic fit, triggering an instant recalculation of the modulus and yield strength.
+  - **Detailed Graphical Indicators**: Plots the stress-strain curve, modulus fit line, 0.2% offset line, and highlights critical material milestones (Yield Point, UTS, Break Point) with custom markers.
+  - **Operator Notes & Report Export**: Allows saving custom operator comments and generating a professional PDF report containing specimen parameters, calculated mechanical properties, notes, and the final stress-strain graph.
+- **Scalebar Annotation Burning**: Integrated a scale bar utility mapping Navitar zoom barrel positions (0.7x to 4.5x) to empirical stage-micrometer calibration values (`pixels_per_mm`). When active, it burns a physical scale bar overlay onto saved TIFF frames. To avoid frame dropping, the annotation drawing is executed in a background daemon thread (`ImageSaveWorker`).
+- **Manual Image Capture**: Added single-frame capture capability accessible via both the Image Setup and Test Dashboard tabs. Captures are timestamped to the microsecond (`capture_{timestamp}_{microseconds}.tiff`) and organized into a dedicated `Manual_Image_Captures` subdirectory under the active test session's output directory.
+- **Dual-Protection Actuator Safety Latches**: Implemented a continuous load monitoring safeguard checking both:
+  1. Tared load (protecting the specimen)
+  2. Raw/non-tared load (protecting the load cell hardware itself from damage, even if the display was zeroed at high preloads)
+  - Automatically triggers when the load cell reaches ±5000 N and the motor is driving towards the limit, locking direction and sending a `STOP` command to the serial interface.
+- **Displacement Sensor Safety Latch & Warning**: Implemented a two-stage safety guard operating on raw LVDT displacement:
+  - **Upper Safety Limit (> 9.5 mm)**: Triggers an automatic motor stop and blocks positive/compression travel when exceeded, requiring negative/tension travel to return the actuator to the safe range (0.5 mm to 9.5 mm).
+  - **Lower Safety Warning (< 0.5 mm)**: Emits a single warning popup alerting the operator that the displacement sensor has lost physical contact with the specimen. This warning does not halt the motor, ensuring active tests are not disrupted.
 - **Edmund Optics Coaxial Spot Light Controller**: Added `light_controller.py` to drive intensity via NI-DAQ AO0 (0–10 V DC). Runs on the main UI thread (instantaneous writes).
-- **Safety Limits & Break Detection**: Implemented a continuous 5000 N hard load cell limit in the acquisition thread, automatically sending a `STOP` command to the motor serial interface if exceeded. Added configurable break-detection (load drop threshold over consecutive samples).
 - **Preload Auto-Stop**: Integrated real-time load monitoring to stop the motor via serial once a target preload is reached.
 - **Inno Setup Installer Metadata**: Configured `installer.iss` with publisher links, setup mutex (preventing concurrent setup processes), and proprietary EULA (`LICENSES/LICENSE.txt`) acceptance step.
 - **Windows Executable Properties**: Embedded file properties (Company, File Version, Copyright) in the standalone executable using a `file_version_info.txt` descriptor with PyInstaller.
