@@ -49,6 +49,7 @@ agenst.md
 test_pdf.py
 dummy.png
 execution/test_output_stress_strain.png
+test_results.xlsx
 
 # Local config (contains user-specific paths)
 home_config.json

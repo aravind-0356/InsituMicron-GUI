@@ -206,6 +206,10 @@ class DAQController(QObject):
         """Auto-detect and start DAQ. (Non-blocking request)"""
         if self._active:
             return
+
+        # Only auto-start Uniaxial DAQ if system mode is Uniaxial
+        if hasattr(self._mw, '_system_mode') and self._mw._system_mode != "Uniaxial":
+            return
         
         from daq_handler import HAS_NIDAQMX
         if not HAS_NIDAQMX:

@@ -1,5 +1,5 @@
 {
-    "_comment": "Biaxial load cell calibration config for NI cDAQ-9174 + NI-9219.",
+    "_comment": "Biaxial load cell calibration config for NI cDAQ-9174 + NI-9219 (Extracted from NI MAX configData.nce - Task 'German and chinese lc cali').",
     "_units": {
         "sensitivity_vv": "V/V (Volts per Volt at full excitation)",
         "intercept_n":    "Newtons — physical value at 0 V/V output (first_physical_val)",
@@ -12,30 +12,30 @@
     },
     "sensor_0": {
         "physical_channel": "ai0",
-        "name": "LC1",
-        "sensitivity_vv": 0.00081309,
-        "intercept_n": -226.25,
-        "span_n": 9773.75
+        "name": "LC1 (Y-Axis Top - German HBM U9C)",
+        "sensitivity_vv": 0.001,
+        "intercept_n": -632.00,
+        "span_n": 9368.00
     },
     "sensor_1": {
         "physical_channel": "ai1",
-        "name": "LC2",
-        "sensitivity_vv": 0.00080917,
-        "intercept_n": 0.0,
-        "span_n": 10000.0
+        "name": "LC2 (Y-Axis Bottom - Chinese Column)",
+        "sensitivity_vv": 0.00081309,
+        "intercept_n": -225.96,
+        "span_n": 9774.04
     },
     "sensor_2": {
         "physical_channel": "ai2",
-        "name": "LC3",
+        "name": "LC3 (X-Axis Left - German HBM U9C)",
         "sensitivity_vv": 0.001,
-        "intercept_n": 0.0,
-        "span_n": 10000.0
+        "intercept_n": 455.74,
+        "span_n": 10455.74
     },
     "sensor_3": {
         "physical_channel": "ai3",
-        "name": "LC4",
-        "sensitivity_vv": 0.001,
-        "intercept_n": 0.0,
-        "span_n": 10000.0
+        "name": "LC4 (X-Axis Right - Chinese Column)",
+        "sensitivity_vv": 0.00080917,
+        "intercept_n": -149.47,
+        "span_n": 9850.53
     }
 }

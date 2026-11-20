@@ -6,7 +6,7 @@ import collections
 import numpy as np
 
 from PySide6.QtCore import QObject, Signal, Slot, QCoreApplication
-from logging_config import get_logger
+from logging_config import get_logger, resource_path
 
 logger = get_logger(__name__)
 
@@ -60,7 +60,7 @@ class CDAQWorker(QObject):
         self._system_mode = "Biaxial"
         
         # Configuration
-        self._config_path = os.path.join("config", "sensors_config.json")
+        self._config_path = resource_path(os.path.join("config", "sensors_config.json"))
         self._sample_rate = 100
         self._batch_size = 10
         self._channels_config = []
@@ -107,6 +107,7 @@ class CDAQWorker(QObject):
 
     def load_config(self):
         try:
+            self._config_path = resource_path(os.path.join("config", "sensors_config.json"))
             with open(self._config_path, 'r') as f:
                 config = json.load(f)
                 acq = config.get("acquisition", {})
@@ -124,14 +125,19 @@ class CDAQWorker(QObject):
             logger.error("Failed to load cDAQ config: %s", e)
             return False
 
-    def detect_device(self):
+    def detect_device(self, allow_simulated=False):
         if not HAS_NIDAQMX: return None
         try:
             system = nidaqmx.system.System.local()
+            # First priority: find real physical cDAQ device
             for dev in system.devices:
-                # Find device that supports analog input and is likely a cDAQ module
-                if len(dev.ai_physical_chans) >= 4:
+                if len(dev.ai_physical_chans) >= 4 and not dev.is_simulated:
                     return dev.name
+            # Fallback to simulated device only if explicitly allowed
+            if allow_simulated:
+                for dev in system.devices:
+                    if len(dev.ai_physical_chans) >= 4:
+                        return dev.name
         except Exception as e:
             logger.error("Error detecting cDAQ: %s", e)
         return None
@@ -165,6 +171,12 @@ class CDAQWorker(QObject):
             return
 
         try:
+            # Force reset the device to clear any zombie locks from previous crashes
+            try:
+                nidaqmx.system.System.local().devices[dev_name].reset_device()
+            except Exception as e:
+                logger.warning("Could not reset device %s: %s", dev_name, e)
+
             self._task = nidaqmx.Task()
             
             for cfg in self._channels_config:

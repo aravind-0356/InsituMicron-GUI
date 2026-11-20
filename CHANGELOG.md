@@ -2,6 +2,14 @@
 
 All notable changes to the InsituMicron GUI will be documented in this file.
 
+## [3.2.1] — 2026-11-18
+
+### Fixed
+- **Displacement Safety Guard Spam & Ghost Value Prevention**:
+  - Filtered out NI-DAQmx simulated devices (`is_simulated`) from `detect_daq_device()` in `daq_handler.py`, preventing offline synthetic signals from auto-starting acquisition when physical hardware is unplugged.
+  - Added hysteresis deadbands to displacement lower and upper safety guards in `daq_handler.py` so ambient noise and boundary crossings do not trigger continuous modal dialog spam.
+  - Added `_system_mode` gating to `daq_handler.py` and synchronized worker auto-polling in `gui.py` and `controllers.py` so Uniaxial DAQ guards do not falsely trigger during Biaxial operations.
+
 ## [3.2.0] — 2026-06-24
 
 ### Added

@@ -26,18 +26,22 @@ def resource_path(relative_path):
     """
     Get absolute path to resource, works for dev and for PyInstaller.
     PyInstaller 6+ places resources in _internal/ folder for onedir mode.
+    Also allows user/technician configuration overrides adjacent to the executable.
     """
     if getattr(sys, 'frozen', False):
-        # When running as frozen, resources are in the same folder as the exe
-        # or in the _internal folder (PyInstaller 6+ default).
-        base_path = getattr(sys, '_MEIPASS', os.path.dirname(sys.executable))
+        exe_dir = os.path.dirname(sys.executable)
+        override_path = os.path.join(exe_dir, relative_path)
+        if os.path.exists(override_path):
+            return override_path
+
+        base_path = getattr(sys, '_MEIPASS', exe_dir)
         
         # Check if we are in PyInstaller 6+ onedir mode where resources are in _internal
         internal_path = os.path.join(base_path, '_internal')
         if os.path.exists(internal_path):
             base_path = internal_path
     else:
-        base_path = os.path.abspath(".")
+        base_path = os.path.dirname(os.path.abspath(__file__))
 
     return os.path.join(base_path, relative_path)
 

@@ -165,19 +165,18 @@ class MaterialAnalysisEngine:
             result.warnings.append("Gauge length is zero or negative — strain calculation invalid.")
             return result
 
-        # ---- Auto-detect Negative Direction Test ------------------------
-        # If the maximum absolute negative load is greater than the max positive load,
-        # it means the test (e.g. Tension) was recorded with negative values.
-        # We invert the data into the positive quadrant so all peak-detection 
-        # and offset-yield algorithms work seamlessly.
-        if min(load) < 0 and abs(min(load)) > max(load):
-            load = [-x for x in load]
-            displacement = [-x for x in displacement]
+        # ---- 1. Pre-process and Convert to Stress / Strain --------------
+        load_arr = np.array(load, dtype=float)
+        disp_arr = np.array(displacement, dtype=float)
+        
+        # Detect if this is a compressive test (peak negative load > peak positive load)
+        if len(load_arr) > 0 and abs(np.min(load_arr)) > abs(np.max(load_arr)):
+            load_arr = -load_arr
+            disp_arr = -disp_arr
             result.warnings.append("Test recorded with negative values: Data has been inverted to the positive quadrant for analysis.")
 
-        # ---- 1. Convert to Stress / Strain ------------------------------
-        stress = np.array(load, dtype=float) / area_mm2          # MPa
-        strain = np.array(displacement, dtype=float) / gauge_length_mm  # dimensionless
+        stress = load_arr / area_mm2          # MPa
+        strain = disp_arr / gauge_length_mm  # dimensionless
 
         result.stress = stress.tolist()
         result.strain = strain.tolist()

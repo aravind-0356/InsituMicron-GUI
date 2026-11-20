@@ -43,10 +43,13 @@ except Exception as e:
     logger.error("NI-DAQmx Import Failure:\n%s", traceback.format_exc())
 
 
-def detect_daq_device():
+def detect_daq_device(allow_simulated=False):
     """
     Check if any NI DAQ device is connected.
     Also validates that the C-API (nicaiu.dll) is correctly installed.
+
+    Args:
+        allow_simulated (bool): If True, fallback to simulated devices. Default False.
 
     Returns:
         str or None: Device name (e.g. 'Dev1') if found, None otherwise.
@@ -55,15 +58,30 @@ def detect_daq_device():
         return None
     try:
         system = nidaqmx.system.System.local()
+        # First priority: find real physical DAQ device
         for dev in system.devices:
             # Skip cDAQ chassis and modules (they belong to the Biaxial system)
             if "cdaq" in dev.name.lower() or "cdaq" in dev.product_type.lower():
                 continue
             if "9219" in dev.product_type:
                 continue
-                
-            logger.info("DAQ device detected: %s (%s)", dev.name, dev.product_type)
+            if dev.is_simulated:
+                continue
+
+            logger.info("DAQ physical device detected: %s (%s)", dev.name, dev.product_type)
             return dev.name
+
+        # Fallback to simulated device only if explicitly allowed
+        if allow_simulated:
+            for dev in system.devices:
+                if "cdaq" in dev.name.lower() or "cdaq" in dev.product_type.lower():
+                    continue
+                if "9219" in dev.product_type:
+                    continue
+
+                logger.info("DAQ simulated device detected (fallback): %s (%s)", dev.name, dev.product_type)
+                return dev.name
+
         return None
     except Exception as e:
         # Check for typical "DLL not found" errors
@@ -103,7 +121,8 @@ def perform_full_daq_diagnostic():
         else:
             report.append(f"[PASS] {len(devices)} device(s) found.")
             for i, dev in enumerate(devices):
-                report.append(f"       Device {i+1}: {dev.name} ({dev.product_type})")
+                sim_tag = " [SIMULATED]" if getattr(dev, 'is_simulated', False) else ""
+                report.append(f"       Device {i+1}: {dev.name} ({dev.product_type}){sim_tag}")
             
             # 3. Connection Test (Try to create a dummy task)
             try:
@@ -305,6 +324,7 @@ class DAQWorker(QObject):
 
         self._encoder_pos = 0
         self._encoder_limit_warned = False
+        self._system_mode = "Uniaxial"
 
         self._freeze_plots = False
 
@@ -564,38 +584,41 @@ class DAQWorker(QObject):
 
                     # --- Displacement Safety Guard (Uniaxial Only) ---
                     # Operates on raw (non-tared) displacement.
-                    raw_disp = self._disp_filtered
-                    motor_dir = self._motor_direction
+                    if self._system_mode == "Uniaxial":
+                        raw_disp = self._disp_filtered
+                        motor_dir = self._motor_direction
 
-                    # -- Upper Limit (> 9.5mm) --
-                    if raw_disp >= self._disp_upper_limit:
-                        if motor_dir > 0:  # Compression (positive) is BLOCKED
-                            self._safe_stop()
-                            with self._data_lock:
-                                self._motor_direction = 0
-                            if not self._disp_upper_warned:
-                                self._disp_upper_warned = True
-                                self.overload_detected.emit(
-                                    f"DISPLACEMENT LIMIT: Upper bound exceeded!\n"
-                                    f"Displacement: {raw_disp:.2f} mm (limit: {self._disp_upper_limit:.1f} mm)\n"
-                                    f"Please move in Tension (negative) direction to return to the safe range (0.5mm to 9.5mm non-tared)."
-                                )
-                        elif motor_dir < 0:
+                        # -- Upper Limit (> 9.5mm) --
+                        if raw_disp >= self._disp_upper_limit:
+                            if motor_dir > 0:  # Compression (positive) is BLOCKED
+                                self._safe_stop()
+                                with self._data_lock:
+                                    self._motor_direction = 0
+                                if not self._disp_upper_warned:
+                                    self._disp_upper_warned = True
+                                    self.overload_detected.emit(
+                                        f"DISPLACEMENT LIMIT: Upper bound exceeded!\n"
+                                        f"Displacement: {raw_disp:.2f} mm (limit: {self._disp_upper_limit:.1f} mm)\n"
+                                        f"Please move in Tension (negative) direction to return to the safe range (0.5mm to 9.5mm non-tared)."
+                                    )
+                            elif motor_dir < 0:
+                                self._disp_upper_warned = False
+                        elif raw_disp <= (self._disp_upper_limit - 0.5):
+                            # Hysteresis: only re-arm once reading drops well below upper limit
                             self._disp_upper_warned = False
-                    else:
-                        self._disp_upper_warned = False
 
-                    # -- Lower Limit (< 0.5mm) --
-                    if raw_disp <= self._disp_lower_limit:
-                        # DO NOT STOP THE MOTOR. Just warn the user once.
-                        if not self._disp_lower_warned:
-                            self._disp_lower_warned = True
-                            self.overload_detected.emit(
-                                f"WARNING: Displacement sensor lost contact and lower safety limit exceeded!\n"
-                                f"Current: {raw_disp:.2f} mm. Safe range is 0.5mm to 9.5mm (non-tared)."
-                            )
-                    else:
-                        self._disp_lower_warned = False
+                        # -- Lower Limit (< 0.5mm) --
+                        if raw_disp <= self._disp_lower_limit:
+                            # DO NOT STOP THE MOTOR. Just warn the user once.
+                            if not self._disp_lower_warned:
+                                self._disp_lower_warned = True
+                                self.overload_detected.emit(
+                                    f"WARNING: Displacement sensor lost contact and lower safety limit exceeded!\n"
+                                    f"Current: {raw_disp:.2f} mm. Safe range is 0.5mm to 9.5mm (non-tared)."
+                                )
+                        elif raw_disp >= (self._disp_lower_limit + 0.5):
+                            # Hysteresis: only re-arm once reading climbs well into the safe zone (>= 1.0 mm)
+                            self._disp_lower_warned = False
 
                     # --- Break Detection (every sample, atomic flags) ---
                     if bd_enabled:
@@ -851,7 +874,8 @@ class DAQWorker(QObject):
     @Slot(str)
     def set_mode(self, mode):
         """Mode setter for DataWorker interface compatibility."""
-        pass  # DAQWorker is always Uniaxial
+        with self._data_lock:
+            self._system_mode = mode
 
     @Slot(bool, float)
     def set_break_detection(self, enabled, threshold):

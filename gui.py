@@ -1558,7 +1558,9 @@ class MainWindow(QMainWindow):
         self.motor_page.on_switch(mode)
 
     def _auto_start_cdaq(self):
-        """Auto-detect and start Biaxial cDAQ if disconnected."""
+        """Auto-detect and start Biaxial cDAQ if disconnected (Biaxial mode only)."""
+        if self._system_mode != "Biaxial":
+            return
         if hasattr(self, 'cdaq_worker') and not self.cdaq_worker.is_acquiring():
             self.cdaq_worker.request_start(silent=True)
 
@@ -1569,6 +1571,15 @@ class MainWindow(QMainWindow):
         self.graph_stack.setCurrentIndex(0 if mode == "Uniaxial" else 1)
         self.data_worker.set_mode(mode)
         self.cdaq_worker.set_mode(mode)
+        self.daq_worker.set_mode(mode)
+
+        # Stop inactive acquisition worker when switching modes
+        if mode == "Uniaxial":
+            if hasattr(self, 'cdaq_worker') and self.cdaq_worker.is_acquiring():
+                self.cdaq_worker.stop_acquisition()
+        else:
+            if hasattr(self, 'daq_ctrl') and self.daq_ctrl.is_active:
+                self.daq_ctrl.stop()
 
         # Delegate dashboard curve recreation to GraphController
         self.graph_ctrl.setup_curves(mode)

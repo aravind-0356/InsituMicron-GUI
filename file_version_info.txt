@@ -1,8 +1,8 @@
 VSVersionInfo(
   ffi=FixedFileInfo(
     # filevers and prodvers should be always a tuple with four items: (1, 0, 0, 0)
-    filevers=(3, 2, 0, 0),
-    prodvers=(3, 2, 0, 0),
+    filevers=(3, 2, 1, 0),
+    prodvers=(3, 2, 1, 0),
     # Contains a bitmask that specifies the valid bits 'flags'r
     mask=0x3f,
     # Contains a bitmask that specifies the Boolean attributes of the file.
@@ -26,12 +26,12 @@ VSVersionInfo(
         '040904b0',
         [StringStruct('CompanyName', 'InsituMicron'),
         StringStruct('FileDescription', 'InsituMicron GUI'),
-        StringStruct('FileVersion', '3.2.0.0'),
+        StringStruct('FileVersion', '3.2.1.0'),
         StringStruct('InternalName', 'InsituMicronGUI'),
         StringStruct('LegalCopyright', 'Copyright (c) 2026 InsituMicron'),
         StringStruct('OriginalFilename', 'InsituMicronGUI.exe'),
         StringStruct('ProductName', 'InsituMicron GUI'),
-        StringStruct('ProductVersion', '3.2.0.0')])
+        StringStruct('ProductVersion', '3.2.1.0')])
       ]), 
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

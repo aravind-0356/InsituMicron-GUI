@@ -3,7 +3,7 @@
 ; Bundles the PyInstaller output, executes NI-DAQmx minimal install via nipkg, and STM32 VCP install.
 
 #define MyAppName "InsituMicron GUI"
-#define MyAppVersion "3.2"
+#define MyAppVersion "3.2.1"
 #define MyAppPublisher "InsituMicron"
 #define MyAppExeName "InsituMicronGUI.exe"
 
@@ -22,7 +22,7 @@ LicenseFile=LICENSES\LICENSE.txt
 SetupMutex=InsituMicronGUISetupMutex
 
 ; Installer executable metadata
-VersionInfoVersion=3.2.0.0
+VersionInfoVersion=3.2.1.0
 VersionInfoCompany={#MyAppPublisher}
 VersionInfoDescription={#MyAppName} Installer
 VersionInfoCopyright=Copyright (C) 2026 {#MyAppPublisher}
@@ -38,8 +38,8 @@ WizardStyle=modern
 ; Requires admin privileges to install drivers
 PrivilegesRequired=admin
 MinVersion=10.0
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
@@ -52,6 +52,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "dist\InsituMicronGUI\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 ; License Files
 Source: "LICENSES\*"; DestDir: "{app}\LICENSES"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Configuration Files (Allows live calibration / sensor parameter editing)
+Source: "config\*"; DestDir: "{app}\config"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
 ; Start Menu Shortcut
